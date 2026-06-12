@@ -1,7 +1,7 @@
 {
   "name": "tts-web-app",
   "version": "1.0.0",
-  "description": "TTS Web App con tik.tools API",
+  "description": "TikTok LIVE Leaderboard con recarga diaria usando la API de tik.tools",
   "main": "server.js",
   "type": "module",
   "scripts": {

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TikTok LIVE Leaderboard · Ranking Global</title>
+  <meta name="description" content="Ranking diario de los mejores creadores de TikTok LIVE." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Fondo 3D con Three.js -->
+  <canvas id="bg3d" aria-hidden="true"></canvas>
+  <div class="aurora" aria-hidden="true"></div>
+
+  <header class="nav">
+    <div class="nav-brand">
+      <span class="nav-logo">◆</span>
+      <span>LIVE<b>BOARD</b></span>
+    </div>
+    <div class="nav-meta">
+      <span class="live-dot"></span>
+      <span id="statusText">Cargando ranking…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <p class="hero-kicker">RANKING GLOBAL · TIKTOK LIVE</p>
+      <h1 class="hero-title">
+        <span class="line" data-text="LOS MEJORES">LOS MEJORES</span>
+        <span class="line gradient" data-text="CREADORES LIVE">CREADORES LIVE</span>
+      </h1>
+      <p class="hero-sub">Clasificación actualizada automáticamente cada 24 horas con datos de tik.tools</p>
+
+      <div class="refresh-panel tilt-card">
+        <div class="refresh-item">
+          <span class="refresh-label">Última actualización</span>
+          <span class="refresh-value" id="lastUpdate">—</span>
+        </div>
+        <div class="refresh-divider"></div>
+        <div class="refresh-item">
+          <span class="refresh-label">Próxima recarga en</span>
+          <span class="refresh-value mono" id="countdown">--:--:--</span>
+        </div>
+        <div class="refresh-divider"></div>
+        <div class="refresh-item">
+          <span class="refresh-label">Usuarios en ranking</span>
+          <span class="refresh-value mono" id="totalUsers">0</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Podio Top 3 -->
+    <section class="podium" id="podium" aria-label="Top 3">
+      <!-- generado por JS -->
+    </section>
+
+    <!-- Buscador -->
+    <section class="toolbar">
+      <div class="search-box tilt-card">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="search" id="searchInput" placeholder="Buscar creador…" autocomplete="off" />
+      </div>
+    </section>
+
+    <!-- Ranking completo -->
+    <section class="board">
+      <div class="board-head">
+        <span class="col-rank">#</span>
+        <span class="col-user">Creador</span>
+        <span class="col-score">Puntuación</span>
+        <span class="col-viewers">Espectadores</span>
+        <span class="col-followers">Seguidores</span>
+      </div>
+      <div id="boardBody" class="board-body">
+        <div class="loader">
+          <div class="loader-cube"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+          <p>Sincronizando con TikTok LIVE…</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Datos de <a href="https://tik.tools" target="_blank" rel="noopener">tik.tools</a> · Recarga automática diaria · <span id="footerYear"></span></p>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

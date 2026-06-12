@@ -1,211 +1,99 @@
-# 🎙️ TTS Web App - Generador de Voz con IA
+# 🏆 LIVEBOARD · TikTok LIVE Leaderboard
 
-Una aplicación web moderna para convertir texto a voz usando la API de **tik.tools**. Características completas de personalización con interfaz intuitiva.
+Web profesional con un **ranking global de creadores de TikTok LIVE** que se **recarga automáticamente cada 24 horas**, usando la API de [tik.tools](https://tik.tools/guides/tiktok-live-leaderboard-api).
 
 ## ✨ Características
 
-- 🎙️ **6 voces diferentes** con personalización de velocidad y volumen
-- 🌍 **8 idiomas soportados** (Inglés, Español, Portugués, Francés, Alemán, Italiano, Japonés, Chino)
-- 🎚️ **Controles avanzados** de velocidad y volumen en tiempo real
-- 📥 **Descarga de audio** en formato MP3
-- 🔄 **Conexión estable en segundo plano** con health checks automáticos
-- 🎨 **Diseño responsivo y moderno** con gradientes
-- ⚡ **Interfaz rápida y fluid**
-- 🔐 **API Key segura** en variables de entorno
+- 🏆 **Ranking global** de creadores ordenado por puntuación (diamantes)
+- 🔄 **Recarga automática diaria** (caché de 24h en el servidor + cuenta atrás en la web)
+- 🥇 **Podio Top 3** con tarjetas 3D, medallas flotantes y efecto tilt
+- 🌌 **Fondo 3D animado con Three.js**: campo de partículas, figuras wireframe flotantes y parallax con el ratón
+- 🎬 **Animaciones pro**: entradas 3D del título, filas con stagger, contadores animados, aurora de fondo, loader cúbico 3D
+- 🔍 **Buscador en vivo** de creadores
+- 📱 **Diseño responsivo** con glassmorphism y modo `prefers-reduced-motion`
+- 🔐 **API key segura** en variables de entorno (nunca se expone al navegador)
 
-## 🚀 Quick Start en Fly.io
+## 🚀 Quick Start
 
-### 1. Clonar el repositorio
-\`\`\`bash
+```bash
 git clone https://github.com/noahxsu777/tts-web-app.git
 cd tts-web-app
-\`\`\`
-
-### 2. Instalar Fly CLI
-\`\`\`bash
-curl -L https://fly.io/install.sh | sh
-\`\`\`
-
-### 3. Autenticarse
-\`\`\`bash
-fly auth login
-\`\`\`
-
-### 4. Desplegar
-\`\`\`bash
-fly deploy
-\`\`\`
-
-### 5. Ver tu app
-\`\`\`bash
-fly open
-\`\`\`
-
-## 📝 Configuración Local
-
-### Requisitos
-- Node.js 18+
-- npm o yarn
-
-### Instalación
-\`\`\`bash
 npm install
-\`\`\`
+cp .env.example .env   # añade tu TIK_TOOLS_API_KEY
+npm start
+```
 
-### Variables de entorno
-Crear archivo \`.env\`:
-\`\`\`
-TIK_TOOLS_API_KEY=tu_api_key_aqui
-PORT=3000
-NODE_ENV=development
-\`\`\`
+Abre `http://localhost:3000`.
 
-### Ejecutar en desarrollo
-\`\`\`bash
-npm run dev
-\`\`\`
+## 🔒 Variables de entorno
 
-Acceder a \`http://localhost:3000\`
+| Variable | Descripción |
+|---|---|
+| `TIK_TOOLS_API_KEY` | Tu API key de tik.tools (**requerido**) |
+| `PORT` | Puerto del servidor (default: 3000) |
+| `TIK_TOOLS_API_BASE` | Base de la API (default: `https://api.tik.tools`) |
 
-## 🏗️ Estructura del Proyecto
+> ⚠️ La API key vive solo en el servidor (`.env`, ignorado por git). El frontend consume `/api/leaderboard` sin exponer credenciales.
 
-\`\`\`
-tts-web-app/
-├── server.js              # Backend Express.js
-├── package.json           # Dependencias
-├── Dockerfile             # Contenedor Docker
-├── fly.toml              # Configuración Fly.io
-├── .env                  # Variables de entorno (no compartir)
-├── .env.example          # Template de variables
-├── public/
-│   ├── index.html        # HTML principal
-│   ├── app.js            # Frontend JavaScript
-│   └── styles.css        # Estilos CSS
-└── README.md             # Este archivo
-\`\`\`
+## 📡 API interna
 
-## 🛠️ Tecnología Stack
+### GET `/api/leaderboard`
+Devuelve el ranking cacheado (se refresca solo cada 24h).
 
-**Backend:**
-- Node.js 18
-- Express.js
-- Axios
-- CORS
-
-**Frontend:**
-- HTML5
-- CSS3 (Gradientes, Flexbox, Grid)
-- Vanilla JavaScript
-- Web Audio API
-
-**Deployment:**
-- Fly.io
-- Docker
-
-## 📡 API Endpoints
-
-### POST \`/api/tts\`
-Genera TTS desde texto
-
-**Body:**
-\`\`\`json
-{
-  "text": "Hola mundo",
-  "voice": "voice1",
-  "language": "es",
-  "speed": 1,
-  "volume": 1
-}
-\`\`\`
-
-**Response:**
-\`\`\`json
+```json
 {
   "success": true,
-  "audioUrl": "https://...",
-  "duration": 2.5
+  "updatedAt": "2026-06-12T08:00:00.000Z",
+  "nextRefresh": "2026-06-13T08:00:00.000Z",
+  "total": 50,
+  "users": [
+    { "rank": 1, "username": "creator", "nickname": "Creator", "avatar": "https://…", "score": 152000, "viewers": 12400, "followers": 2400000, "isLive": true }
+  ]
 }
-\`\`\`
+```
 
-### GET \`/api/health\`
-Verifica estado del servidor
+### POST `/api/leaderboard/refresh`
+Fuerza una recarga inmediata del ranking (útil para pruebas).
 
-**Response:**
-\`\`\`json
-{
-  "status": "ok",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-\`\`\`
+### GET `/api/health`
+Estado del servidor.
 
-## 🎨 Personalización
+## 🔄 Cómo funciona la recarga diaria
 
-### Agregar más voces
-Editar \`public/app.js\`:
-\`\`\`javascript
-const VOICES = [
-  // ... voces existentes
-  { id: 'voice7', name: 'Mi Voz', icon: '🎯' },
-];
-\`\`\`
+1. Al arrancar, el servidor carga la última caché de `data/leaderboard.json` y la refresca si tiene más de 24h.
+2. Un temporizador comprueba cada 15 minutos si la caché ha caducado y, en ese caso, vuelve a llamar a la API de tik.tools.
+3. El frontend muestra una **cuenta atrás en directo** hasta la próxima recarga y se actualiza solo cuando llega a cero.
 
-### Agregar más idiomas
-\`\`\`javascript
-const LANGUAGES = [
-  // ... idiomas existentes
-  { code: 'ru', name: 'Русский', flag: '🇷🇺' },
-];
-\`\`\`
+## 🚀 Deploy en Fly.io
 
-### Cambiar colores
-Editar \`public/styles.css\`:
-\`\`\`css
-:root {
-  --primary: #667eea;  /* Cambiar color primario */
-  --secondary: #764ba2; /* Cambiar color secundario */
-}
-\`\`\`
+```bash
+fly auth login
+fly secrets set TIK_TOOLS_API_KEY=tu_api_key
+fly deploy
+fly open
+```
 
-## 🔒 Variables de Entorno
+## 🏗️ Estructura
 
-- \`TIK_TOOLS_API_KEY\` - Tu API key de tik.tools (requerido)
-- \`PORT\` - Puerto del servidor (default: 3000)
-- \`NODE_ENV\` - Entorno (development/production)
+```
+tts-web-app/
+├── server.js          # Backend Express: fetch + caché diaria + API
+├── public/
+│   ├── index.html     # UI principal
+│   ├── styles.css     # Estilos, animaciones 3D CSS
+│   └── app.js         # Three.js, podio, tabla, countdown
+├── data/              # Caché del ranking (gitignored)
+├── Dockerfile
+├── fly.toml
+└── .env.example
+```
 
-## 📊 Monitoreo
+## 🛠️ Stack
 
-En Fly.io puedes monitorear:
-\`\`\`bash
-fly logs
-fly status
-fly metrics
-\`\`\`
-
-## 🐛 Troubleshooting
-
-### "Error de conexión a API"
-- Verifica que tu API key sea válida
-- Comprueba el archivo \`.env\`
-- Revisa los logs: \`fly logs\`
-
-### "Audio no se reproduce"
-- Comprueba los permisos de audio del navegador
-- Verifica la conexión a internet
-- Revisa la consola del navegador (F12)
-
-### "App se cae en Fly.io"
-\`\`\`bash
-fly logs -a tts-web-app
-\`\`\`
+- **Backend:** Node.js 18, Express, fetch nativo
+- **Frontend:** HTML5, CSS3 (3D transforms, glassmorphism), Vanilla JS, Three.js
+- **Deploy:** Fly.io / Docker
 
 ## 📝 Licencia
 
-MIT
-
-## 👨‍💻 Autor
-
-Noah
-
----
-
-**🎉 ¡Disfruta generando voces!**
+MIT — Noah
