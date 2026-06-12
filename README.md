@@ -2,6 +2,8 @@
 
 Web profesional con un **ranking global de creadores de TikTok LIVE** que se **recarga automáticamente cada 24 horas**, usando la API de [tik.tools](https://tik.tools/guides/tiktok-live-leaderboard-api).
 
+La app tiene 4 secciones: **🏆 Ranking** (top 100 por liga/país), **📡 Monitor LIVE** (lectura en tiempo real de cualquier directo, en segundo plano), **🧰 Herramientas** (todos los endpoints REST) y **📊 Estado** (salud, cuota y monitores).
+
 ## ✨ Características
 
 - 🏆 **Ranking global** de creadores ordenado por puntuación (diamantes)
@@ -12,6 +14,12 @@ Web profesional con un **ranking global de creadores de TikTok LIVE** que se **r
 - 🔍 **Buscador en vivo** de creadores
 - 📱 **Diseño responsivo** con glassmorphism y modo `prefers-reduced-motion`
 - 🔐 **API key segura** en variables de entorno (nunca se expone al navegador)
+- 📡 **Monitor LIVE en segundo plano**: chat, regalos, likes, follows, batallas y espectadores en tiempo real vía WebSocket
+- 🛡️ **Conexión permanente sin interrupciones**: supervisor con reconexión infinita (backoff 5s→120s), espera y re-engancha cuando el directo vuelve, watchdog anti-conexiones-zombi y blindaje del proceso ante errores no capturados
+- 🧰 **Todas las herramientas de la API**: check alive (individual y masivo), info de sala, URLs HLS/FLV, ranking de gifters por sala, catálogo de regalos, hashtags en tendencia, portada del stream y cuota
+- 📊 **Panel de estado** con uptime, cuota de la API y salud de cada monitor
+
+> ⚠️ El monitor en segundo plano necesita un servidor persistente (Fly.io, Docker o local). En Vercel serverless funciona todo lo demás (ranking + herramientas), pero los WebSockets de larga duración no se mantienen entre invocaciones.
 
 ## 🚀 Quick Start
 

@@ -25,7 +25,15 @@
     </div>
   </header>
 
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-view="ranking">🏆 Ranking</button>
+    <button class="tab" data-view="monitor">📡 Monitor LIVE</button>
+    <button class="tab" data-view="tools">🧰 Herramientas</button>
+    <button class="tab" data-view="estado">📊 Estado</button>
+  </nav>
+
   <main>
+    <div id="view-ranking" class="view active">
     <section class="hero">
       <p class="hero-kicker">RANKING GLOBAL · TIKTOK LIVE</p>
       <h1 class="hero-title">
@@ -92,6 +100,107 @@
         </div>
       </div>
     </section>
+    </div><!-- /view-ranking -->
+
+    <!-- ================= MONITOR LIVE ================= -->
+    <div id="view-monitor" class="view">
+      <section class="panel-hero">
+        <h1 class="panel-title">📡 Monitor <span class="gradient-text">LIVE</span></h1>
+        <p class="panel-sub">Conéctate al directo de cualquier creador y lee chat, regalos, likes y batallas en tiempo real. La conexión vive en el servidor: <b>se reconecta sola y no deja de leer</b> aunque cierres el navegador.</p>
+      </section>
+
+      <form id="monitorForm" class="monitor-form tilt-card">
+        <span class="at-sign">@</span>
+        <input type="text" id="monitorUser" placeholder="usuario de TikTok en directo…" autocomplete="off" required />
+        <button type="submit" class="btn-primary">Conectar</button>
+      </form>
+
+      <div id="monitorCards" class="monitor-cards"><!-- monitores activos --></div>
+
+      <section class="console-wrap" id="consoleWrap" hidden>
+        <div class="console-head">
+          <span id="consoleTitle">Consola</span>
+          <div class="console-stats" id="consoleStats"></div>
+        </div>
+        <div class="console" id="consoleBody"></div>
+        <div class="gifters" id="giftersPanel"></div>
+      </section>
+    </div>
+
+    <!-- ================= HERRAMIENTAS ================= -->
+    <div id="view-tools" class="view">
+      <section class="panel-hero">
+        <h1 class="panel-title">🧰 Herramientas <span class="gradient-text">tik.tools</span></h1>
+        <p class="panel-sub">Todas las funciones de la API REST, listas para usar.</p>
+      </section>
+
+      <div class="tools-grid">
+        <article class="tool-card tilt-card">
+          <h3>🟢 ¿Está en directo?</h3>
+          <p>Comprueba al instante si un creador está emitiendo.</p>
+          <div class="tool-row"><input id="t-alive" placeholder="@usuario" /><button data-tool="alive" class="btn-primary">Comprobar</button></div>
+          <pre class="tool-result" id="r-alive" hidden></pre>
+        </article>
+
+        <article class="tool-card tilt-card">
+          <h3>👥 Comprobación masiva</h3>
+          <p>Hasta 100 usuarios a la vez, separados por comas.</p>
+          <div class="tool-row"><input id="t-bulk" placeholder="user1, user2, user3…" /><button data-tool="bulk" class="btn-primary">Comprobar</button></div>
+          <pre class="tool-result" id="r-bulk" hidden></pre>
+        </article>
+
+        <article class="tool-card tilt-card">
+          <h3>ℹ️ Info de la sala</h3>
+          <p>Título, espectadores y perfil del host de un directo.</p>
+          <div class="tool-row"><input id="t-room" placeholder="@usuario" /><button data-tool="room" class="btn-primary">Consultar</button></div>
+          <pre class="tool-result" id="r-room" hidden></pre>
+        </article>
+
+        <article class="tool-card tilt-card">
+          <h3>🎬 URLs del stream</h3>
+          <p>Enlaces HLS/FLV del vídeo en directo.</p>
+          <div class="tool-row"><input id="t-video" placeholder="@usuario" /><button data-tool="video" class="btn-primary">Obtener</button></div>
+          <pre class="tool-result" id="r-video" hidden></pre>
+        </article>
+
+        <article class="tool-card tilt-card">
+          <h3>💎 Ranking de la sala</h3>
+          <p>Top gifters del directo (leaderboard en tiempo real).</p>
+          <div class="tool-row"><input id="t-rank" placeholder="@usuario" /><button data-tool="rank" class="btn-primary">Ver top</button></div>
+          <pre class="tool-result" id="r-rank" hidden></pre>
+        </article>
+
+        <article class="tool-card tilt-card">
+          <h3>🎁 Catálogo de regalos</h3>
+          <p>Todos los regalos de TikTok con su valor en diamantes.</p>
+          <div class="tool-row"><button data-tool="gifts" class="btn-primary">Cargar catálogo</button></div>
+          <pre class="tool-result" id="r-gifts" hidden></pre>
+        </article>
+
+        <article class="tool-card tilt-card">
+          <h3>#️⃣ Hashtags en tendencia</h3>
+          <p>Los hashtags LIVE más populares ahora mismo.</p>
+          <div class="tool-row"><button data-tool="hashtags" class="btn-primary">Ver tendencias</button></div>
+          <pre class="tool-result" id="r-hashtags" hidden></pre>
+        </article>
+
+        <article class="tool-card tilt-card">
+          <h3>🖼️ Portada del directo</h3>
+          <p>Imagen de portada/miniatura del stream.</p>
+          <div class="tool-row"><input id="t-cover" placeholder="@usuario" /><button data-tool="cover" class="btn-primary">Obtener</button></div>
+          <pre class="tool-result" id="r-cover" hidden></pre>
+        </article>
+      </div>
+    </div>
+
+    <!-- ================= ESTADO ================= -->
+    <div id="view-estado" class="view">
+      <section class="panel-hero">
+        <h1 class="panel-title">📊 Estado del <span class="gradient-text">sistema</span></h1>
+        <p class="panel-sub">Salud del servidor, cuota de la API y monitores en segundo plano.</p>
+      </section>
+      <div class="status-grid" id="statusGrid"></div>
+    </div>
   </main>
 
   <footer class="footer">
@@ -100,5 +209,6 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
   <script src="app.js"></script>
+  <script src="panel.js"></script>
 </body>
 </html>

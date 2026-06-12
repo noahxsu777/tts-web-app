@@ -22,6 +22,15 @@ const CACHE_FILE = IS_VERCEL
   ? path.join(os.tmpdir(), 'leaderboard.json')
   : path.join(__dirname, 'data', 'leaderboard.json');
 
+// Blindaje del proceso: ningún error inesperado debe tumbar el servidor
+// (la continuidad de los monitores en segundo plano depende de ello)
+process.on('uncaughtException', (err) => {
+  console.error('[proceso] excepción no capturada (el servidor sigue):', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[proceso] promesa rechazada sin capturar (el servidor sigue):', reason?.message || reason);
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -277,8 +286,125 @@ app.post('/api/leaderboard/refresh', async (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), cachedUsers: cache.users.length });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    cachedUsers: cache.users.length,
+    uptime: Math.floor(process.uptime()),
+    monitors: monitorsEnabled ? monitors.list().length : 'no disponible en serverless',
+  });
 });
+
+// ---------------------------------------------------------------------------
+// Monitor LIVE en segundo plano (conexión permanente con reconexión infinita)
+// ---------------------------------------------------------------------------
+const monitorsEnabled = !IS_VERCEL;
+const monitors = monitorsEnabled
+  ? new (await import('./lib/monitors.js')).MonitorManager({ apiKey: API_KEY, apiBase: API_BASE })
+  : null;
+
+function requireMonitors(req, res) {
+  if (monitorsEnabled) return true;
+  res.status(501).json({
+    success: false,
+    error: 'El monitor en segundo plano necesita un servidor persistente (Fly.io, Docker o local). Vercel serverless no mantiene WebSockets abiertos.',
+  });
+  return false;
+}
+
+app.get('/api/monitors', (req, res) => {
+  if (!requireMonitors(req, res)) return;
+  res.json({ success: true, monitors: monitors.list() });
+});
+
+app.post('/api/monitor/:username/start', (req, res) => {
+  if (!requireMonitors(req, res)) return;
+  try {
+    res.json({ success: true, monitor: monitors.start(req.params.username) });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/monitor/:username/stop', (req, res) => {
+  if (!requireMonitors(req, res)) return;
+  res.json({ success: monitors.stop(req.params.username) });
+});
+
+app.get('/api/monitor/:username/state', (req, res) => {
+  if (!requireMonitors(req, res)) return;
+  const state = monitors.get(req.params.username);
+  if (!state) return res.status(404).json({ success: false, error: 'Monitor no encontrado' });
+  res.json({ success: true, monitor: state });
+});
+
+// Server-Sent Events: flujo continuo de eventos del directo hacia el navegador
+app.get('/api/monitor/:username/events', (req, res) => {
+  if (!requireMonitors(req, res)) return;
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+  const unsubscribe = monitors.subscribe(req.params.username, send);
+  if (!unsubscribe) {
+    send({ type: 'error', data: { message: 'Monitor no encontrado. Inícialo primero.' } });
+    return res.end();
+  }
+  // heartbeat para que proxies/navegador no corten la conexión
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), 25000);
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Herramientas: proxies de todos los endpoints REST de tik.tools
+// (la API key nunca sale del servidor)
+// ---------------------------------------------------------------------------
+async function proxyTikTools(res, path, { method = 'GET', query = {}, body = null } = {}) {
+  try {
+    const params = new URLSearchParams({ apiKey: API_KEY });
+    for (const [k, v] of Object.entries(query)) if (v) params.set(k, v);
+    const r = await fetch(`${API_BASE}${path}?${params}`, {
+      method,
+      headers: body ? { 'content-type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(20000),
+    });
+    const json = await r.json().catch(() => ({}));
+    res.status(r.ok ? 200 : r.status).json(json);
+  } catch (err) {
+    res.status(502).json({ success: false, error: err.message });
+  }
+}
+
+app.get('/api/tools/check-alive', (req, res) =>
+  proxyTikTools(res, '/webcast/check_alive', { query: { unique_id: req.query.user } }));
+
+app.post('/api/tools/bulk-live-check', (req, res) =>
+  proxyTikTools(res, '/webcast/bulk_live_check', { method: 'POST', body: { unique_ids: req.body.users || [] } }));
+
+app.get('/api/tools/room-info', (req, res) =>
+  proxyTikTools(res, '/webcast/room_info', { method: 'POST', body: { unique_id: req.query.user } }));
+
+app.get('/api/tools/room-video', (req, res) =>
+  proxyTikTools(res, '/webcast/room_video', { method: 'POST', body: { unique_id: req.query.user } }));
+
+app.get('/api/tools/rankings', (req, res) =>
+  proxyTikTools(res, '/webcast/rankings', { query: { unique_id: req.query.user } }));
+
+app.get('/api/tools/gift-info', (req, res) => proxyTikTools(res, '/webcast/gift_info'));
+
+app.get('/api/tools/hashtags', (req, res) => proxyTikTools(res, '/webcast/hashtag_list'));
+
+app.get('/api/tools/rate-limits', (req, res) => proxyTikTools(res, '/webcast/rate_limits'));
+
+app.get('/api/tools/room-cover', (req, res) =>
+  proxyTikTools(res, '/webcast/room_cover', { query: { unique_id: req.query.user } }));
 
 if (!IS_VERCEL) {
   app.listen(PORT, async () => {
