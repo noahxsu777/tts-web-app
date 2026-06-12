@@ -6,7 +6,9 @@
    - Cuenta atrás hasta la recarga diaria
    ============================================================ */
 
-const state = { users: [], nextRefresh: null, league: 'global', country: '' };
+const TOP_N = 100;
+// Liga por defecto: Latinoamérica (si tiene datos ese día; si no, Global)
+const state = { users: [], nextRefresh: null, league: 'latam', country: '', leagueChosen: false };
 
 /* ----------------------------------------------------------
    Ligas regionales de TikTok LIVE: los países de un mismo
@@ -93,6 +95,10 @@ async function loadLeaderboard() {
       : '—';
 
     animateCounter(els.totalUsers, data.total);
+    // si la liga por defecto no tiene creadores hoy, caemos a Global
+    if (!state.leagueChosen && !state.users.some((u) => leagueOf(u.region) === state.league)) {
+      state.league = 'global';
+    }
     renderLeagues();
     renderCountrySelect();
     applyFilters();
@@ -125,6 +131,7 @@ function renderLeagues() {
   els.leagueChips.querySelectorAll('.league-chip').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.league = btn.dataset.league;
+      state.leagueChosen = true;
       state.country = '';
       renderLeagues();
       renderCountrySelect();
@@ -155,8 +162,8 @@ function applyFilters() {
   let list = usersInLeague();
   if (state.country) list = list.filter((u) => u.region === state.country);
   if (q) list = list.filter((u) => u.username.toLowerCase().includes(q) || (u.nickname || '').toLowerCase().includes(q));
-  // re-numerar el ranking dentro de la liga/país seleccionado
-  list = list.map((u, i) => ({ ...u, rank: i + 1 }));
+  // re-numerar y limitar al TOP 100 dentro de la liga/país seleccionado
+  list = list.slice(0, TOP_N).map((u, i) => ({ ...u, rank: i + 1 }));
   renderPodium(list.slice(0, 3));
   renderBoard(list);
 }

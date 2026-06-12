@@ -98,41 +98,123 @@ function extractList(payload) {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch del leaderboard global de tik.tools
+// Recolección del leaderboard: varias fuentes que se fusionan hasta el top 100
+//  1. top-channels global (público)
+//  2. top-channels con hint de región por cada país de Latinoamérica
+//  3. feed de descubrimiento paginado (sign-and-return) como relleno
 // ---------------------------------------------------------------------------
-async function fetchLeaderboard() {
-  const endpoints = [
-    `${API_BASE}/api/live/top-channels?apiKey=${encodeURIComponent(API_KEY)}`,
-    `${API_BASE}/webcast/rankings?apiKey=${encodeURIComponent(API_KEY)}`,
-  ];
+const TOP_N = 100;
+const LATAM_REGIONS = ['MX', 'CO', 'AR', 'PE', 'CL', 'EC', 'VE', 'GT', 'DO', 'BO', 'PY', 'UY', 'HN', 'SV', 'NI', 'CR', 'PA'];
 
-  let lastError = null;
-  for (const url of endpoints) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function getJson(url, options = {}) {
+  const res = await fetch(url, {
+    headers: { accept: 'application/json', ...(options.headers || {}) },
+    method: options.method || 'GET',
+    body: options.body,
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} en ${new URL(url).pathname}`);
+  return res.json();
+}
+
+async function fetchTopChannels(region = '') {
+  const params = new URLSearchParams({ apiKey: API_KEY, limit: '200' });
+  if (region) params.set('region', region);
+  const payload = await getJson(`${API_BASE}/api/live/top-channels?${params}`);
+  return extractList(payload).map((raw, i) => {
+    const u = normalizeUser(raw, i);
+    if (!u.region && region) u.region = region;
+    return u;
+  });
+}
+
+// Feed de descubrimiento: tik.tools firma la URL de TikTok y la consumimos
+// nosotros con las cabeceras/cookies que nos devuelve (sign-and-return)
+async function fetchFeedRooms(region = 'US', pages = 3) {
+  const rooms = [];
+  let maxTime = '0';
+  for (let p = 0; p < pages; p++) {
+    const signed = await getJson(`${API_BASE}/webcast/feed?apiKey=${encodeURIComponent(API_KEY)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel_id: '87', count: 50, region, max_time: maxTime }),
+    });
+    if (!signed?.signed_url) break;
+    const res = await fetch(signed.signed_url, {
+      headers: { ...(signed.headers || {}), cookie: signed.cookies || '' },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) break;
+    const tiktok = await res.json();
+    const page = (tiktok?.data || [])
+      .map((entry) => entry?.data || entry)
+      .filter((r) => r && (r.owner || r.id_str));
+    rooms.push(...page);
+    maxTime = tiktok?.extra?.max_time || tiktok?.data?.extra?.max_time;
+    if (!maxTime || !page.length) break;
+    await sleep(400);
+  }
+  return rooms.map((raw, i) => normalizeUser(raw, i));
+}
+
+async function fetchLeaderboard() {
+  const byUsername = new Map();
+  const sources = [];
+  const errors = [];
+
+  const addAll = (users, label) => {
+    let added = 0;
+    for (const u of users) {
+      const key = u.username.toLowerCase();
+      const prev = byUsername.get(key);
+      if (!prev || u.score > prev.score || (!prev.region && u.region)) {
+        byUsername.set(key, { ...prev, ...u });
+        added++;
+      }
+    }
+    if (added) sources.push(`${label}(${added})`);
+  };
+
+  // 1. Ranking global
+  try {
+    addAll(await fetchTopChannels(), 'top-channels');
+  } catch (err) {
+    errors.push(err.message);
+  }
+
+  // 2. Refuerzo por países de Latinoamérica
+  for (const region of LATAM_REGIONS) {
     try {
-      const res = await fetch(url, {
-        headers: { accept: 'application/json' },
-        signal: AbortSignal.timeout(20000),
-      });
-      if (!res.ok) {
-        lastError = new Error(`HTTP ${res.status} en ${new URL(url).pathname}`);
-        continue;
-      }
-      const payload = await res.json();
-      const list = extractList(payload);
-      if (!list.length) {
-        lastError = new Error(`Respuesta sin ranking en ${new URL(url).pathname}`);
-        continue;
-      }
-      const users = list
-        .map(normalizeUser)
-        .sort((a, b) => (b.score - a.score) || (b.viewers - a.viewers))
-        .map((u, i) => ({ ...u, rank: i + 1 }));
-      return { users, source: new URL(url).pathname };
-    } catch (err) {
-      lastError = err;
+      addAll(await fetchTopChannels(region), `top-${region}`);
+      await sleep(300);
+    } catch {
+      /* región sin datos o límite alcanzado: seguimos */
     }
   }
-  throw lastError || new Error('No se pudo obtener el leaderboard');
+
+  // 3. Si seguimos lejos del top 100, rellenamos con el feed de descubrimiento
+  if (byUsername.size < TOP_N) {
+    for (const region of ['MX', 'CO', 'AR', 'ES', 'US']) {
+      try {
+        addAll(await fetchFeedRooms(region, 2), `feed-${region}`);
+        if (byUsername.size >= TOP_N * 2) break;
+        await sleep(400);
+      } catch {
+        /* el feed requiere tier Basic: si no está disponible, lo omitimos */
+      }
+    }
+  }
+
+  if (!byUsername.size) {
+    throw new Error(errors[0] || 'No se pudo obtener el leaderboard');
+  }
+
+  const users = [...byUsername.values()]
+    .sort((a, b) => (b.score - a.score) || (b.viewers - a.viewers))
+    .map((u, i) => ({ ...u, rank: i + 1 }));
+  return { users, source: sources.join('+') };
 }
 
 async function refreshLeaderboard(force = false) {
