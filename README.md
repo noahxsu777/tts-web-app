@@ -90,7 +90,7 @@ tts-web-app/
 
 ## 🛠️ Stack
 
-- **Backend:** Node.js 18, Express, fetch nativo
+- **Backend:** Node.js 24, Express, fetch nativo
 - **Frontend:** HTML5, CSS3 (3D transforms, glassmorphism), Vanilla JS, Three.js
 - **Deploy:** Fly.io / Docker
 

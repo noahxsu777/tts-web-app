@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -11,11 +12,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.TIK_TOOLS_API_KEY || '';
 const API_BASE = process.env.TIK_TOOLS_API_BASE || 'https://api.tik.tools';
+const IS_VERCEL = Boolean(process.env.VERCEL);
 
 // El ranking se recarga una vez al día (24h)
 const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const CHECK_INTERVAL_MS = 15 * 60 * 1000; // comprueba cada 15 min si toca refrescar
-const CACHE_FILE = path.join(__dirname, 'data', 'leaderboard.json');
+// En Vercel solo /tmp es escribible
+const CACHE_FILE = IS_VERCEL
+  ? path.join(os.tmpdir(), 'leaderboard.json')
+  : path.join(__dirname, 'data', 'leaderboard.json');
 
 const app = express();
 app.use(cors());
@@ -154,7 +159,21 @@ async function loadCacheFromDisk() {
 // ---------------------------------------------------------------------------
 // API
 // ---------------------------------------------------------------------------
-app.get('/api/leaderboard', (req, res) => {
+let diskCacheLoaded = false;
+
+app.get('/api/leaderboard', async (req, res) => {
+  // En serverless no hay temporizador: refrescamos bajo demanda si la caché caducó
+  if (IS_VERCEL) {
+    if (!diskCacheLoaded) {
+      diskCacheLoaded = true;
+      await loadCacheFromDisk();
+    }
+    if (!cache.users.length) {
+      await refreshLeaderboard();
+    } else if (Date.now() - cache.updatedAt >= REFRESH_INTERVAL_MS) {
+      refreshLeaderboard(); // recarga en segundo plano, servimos la caché actual
+    }
+  }
   res.json({
     success: cache.users.length > 0,
     updatedAt: cache.updatedAt ? new Date(cache.updatedAt).toISOString() : null,
@@ -174,10 +193,14 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), cachedUsers: cache.users.length });
 });
 
-app.listen(PORT, async () => {
-  console.log(`Servidor escuchando en http://localhost:${PORT}`);
-  if (!API_KEY) console.warn('AVISO: falta TIK_TOOLS_API_KEY en el entorno (.env)');
-  await loadCacheFromDisk();
-  await refreshLeaderboard();
-  setInterval(refreshLeaderboard, CHECK_INTERVAL_MS);
-});
+if (!IS_VERCEL) {
+  app.listen(PORT, async () => {
+    console.log(`Servidor escuchando en http://localhost:${PORT}`);
+    if (!API_KEY) console.warn('AVISO: falta TIK_TOOLS_API_KEY en el entorno (.env)');
+    await loadCacheFromDisk();
+    await refreshLeaderboard();
+    setInterval(refreshLeaderboard, CHECK_INTERVAL_MS);
+  });
+}
+
+export default app;
