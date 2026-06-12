@@ -68,6 +68,10 @@ function normalizeUser(raw, index) {
     followers: Number(
       pick(user, ['follower_count', 'followerCount', 'followers', 'follow_info.follower_count']) ?? 0
     ),
+    region: String(
+      pick(raw, ['region', 'country', 'country_code', 'countryCode']) ||
+      pick(user, ['region', 'country', 'country_code']) || ''
+    ).toUpperCase(),
     isLive: Boolean(pick(raw, ['is_live', 'isLive', 'alive', 'live']) ?? true),
   };
 }
@@ -180,6 +184,7 @@ app.get('/api/leaderboard', async (req, res) => {
     nextRefresh: cache.updatedAt ? new Date(cache.updatedAt + REFRESH_INTERVAL_MS).toISOString() : null,
     total: cache.users.length,
     source: cache.source,
+    regions: [...new Set(cache.users.map((u) => u.region).filter(Boolean))].sort(),
     users: cache.users,
   });
 });

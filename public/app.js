@@ -6,7 +6,39 @@
    - Cuenta atrás hasta la recarga diaria
    ============================================================ */
 
-const state = { users: [], nextRefresh: null };
+const state = { users: [], nextRefresh: null, league: 'global', country: '' };
+
+/* ----------------------------------------------------------
+   Ligas regionales de TikTok LIVE: los países de un mismo
+   grupo (pool) comparten leaderboard, igual que en tik.tools
+---------------------------------------------------------- */
+const LEAGUES = [
+  { id: 'global', name: 'Global', icon: '🌍', countries: null },
+  { id: 'na', name: 'Norteamérica', icon: '🦅', countries: ['US', 'CA'] },
+  { id: 'latam', name: 'Latinoamérica', icon: '🌎', countries: ['MX', 'AR', 'CO', 'CL', 'PE', 'EC', 'VE', 'BO', 'PY', 'UY', 'GT', 'HN', 'SV', 'NI', 'CR', 'PA', 'DO', 'CU', 'PR'] },
+  { id: 'br', name: 'Brasil', icon: '🇧🇷', countries: ['BR'] },
+  { id: 'eu', name: 'Europa', icon: '🏰', countries: ['ES', 'FR', 'DE', 'IT', 'PT', 'GB', 'IE', 'NL', 'BE', 'LU', 'CH', 'AT', 'PL', 'CZ', 'SK', 'HU', 'RO', 'BG', 'GR', 'SE', 'NO', 'DK', 'FI', 'IS', 'EE', 'LV', 'LT', 'UA', 'MD', 'RS', 'HR', 'SI', 'BA', 'MK', 'AL', 'ME', 'CY', 'MT'] },
+  { id: 'mena', name: 'MENA', icon: '🕌', countries: ['SA', 'AE', 'EG', 'MA', 'DZ', 'TN', 'IQ', 'JO', 'LB', 'KW', 'QA', 'BH', 'OM', 'YE', 'LY', 'PS', 'SY', 'TR', 'IL'] },
+  { id: 'asia', name: 'Asia', icon: '🐉', countries: ['JP', 'KR', 'TW', 'HK', 'MO', 'TH', 'VN', 'PH', 'ID', 'MY', 'SG', 'IN', 'PK', 'BD', 'LK', 'NP', 'KH', 'LA', 'MM', 'MN', 'KZ', 'UZ', 'KG', 'AZ', 'AM', 'GE'] },
+  { id: 'africa', name: 'África', icon: '🦁', countries: ['ZA', 'NG', 'KE', 'GH', 'TZ', 'UG', 'ET', 'CM', 'CI', 'SN', 'ZM', 'ZW', 'MZ', 'AO', 'RW', 'BW', 'NA'] },
+  { id: 'oceania', name: 'Oceanía', icon: '🌊', countries: ['AU', 'NZ', 'FJ', 'PG'] },
+];
+
+const countryNames = new Intl.DisplayNames(['es'], { type: 'region' });
+
+function countryName(code) {
+  try { return countryNames.of(code) || code; } catch { return code; }
+}
+
+function countryFlag(code) {
+  if (!/^[A-Z]{2}$/.test(code)) return '🌍';
+  return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+}
+
+function leagueOf(region) {
+  const found = LEAGUES.find((l) => l.countries && l.countries.includes(region));
+  return found ? found.id : 'other';
+}
 
 const els = {
   status: document.getElementById('statusText'),
@@ -16,6 +48,9 @@ const els = {
   podium: document.getElementById('podium'),
   boardBody: document.getElementById('boardBody'),
   search: document.getElementById('searchInput'),
+  leagueChips: document.getElementById('leagueChips'),
+  countrySelect: document.getElementById('countrySelect'),
+  countryFlag: document.getElementById('countryFlag'),
 };
 
 document.getElementById('footerYear').textContent = new Date().getFullYear();
@@ -58,13 +93,79 @@ async function loadLeaderboard() {
       : '—';
 
     animateCounter(els.totalUsers, data.total);
-    renderPodium(state.users.slice(0, 3));
-    renderBoard(state.users);
+    renderLeagues();
+    renderCountrySelect();
+    applyFilters();
   } catch (err) {
     els.status.textContent = 'Error de conexión — reintentando…';
     setTimeout(loadLeaderboard, 15000);
   }
 }
+
+/* ----------------------------------------------------------
+   Ligas y países
+---------------------------------------------------------- */
+function visibleLeagues() {
+  const present = new Set(state.users.map((u) => leagueOf(u.region)));
+  const leagues = LEAGUES.filter((l) => l.id === 'global' || present.has(l.id));
+  if (present.has('other')) leagues.push({ id: 'other', name: 'Otras regiones', icon: '🛰️', countries: [] });
+  return leagues;
+}
+
+function renderLeagues() {
+  els.leagueChips.innerHTML = visibleLeagues()
+    .map(
+      (l, i) => `
+      <button class="league-chip ${state.league === l.id ? 'active' : ''}" data-league="${l.id}" style="--i:${i}">
+        <span class="chip-icon">${l.icon}</span>${l.name}
+      </button>`
+    )
+    .join('');
+
+  els.leagueChips.querySelectorAll('.league-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.league = btn.dataset.league;
+      state.country = '';
+      renderLeagues();
+      renderCountrySelect();
+      applyFilters();
+    });
+  });
+}
+
+function usersInLeague() {
+  if (state.league === 'global') return state.users;
+  return state.users.filter((u) => leagueOf(u.region) === state.league);
+}
+
+function renderCountrySelect() {
+  const countries = [...new Set(usersInLeague().map((u) => u.region).filter(Boolean))]
+    .map((c) => ({ code: c, name: countryName(c) }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'es'));
+
+  els.countrySelect.innerHTML =
+    `<option value="">Todos los países</option>` +
+    countries.map((c) => `<option value="${c.code}">${countryFlag(c.code)} ${esc(c.name)}</option>`).join('');
+  els.countrySelect.value = state.country;
+  els.countryFlag.textContent = state.country ? countryFlag(state.country) : '🌍';
+}
+
+function applyFilters() {
+  const q = els.search.value.trim().toLowerCase();
+  let list = usersInLeague();
+  if (state.country) list = list.filter((u) => u.region === state.country);
+  if (q) list = list.filter((u) => u.username.toLowerCase().includes(q) || (u.nickname || '').toLowerCase().includes(q));
+  // re-numerar el ranking dentro de la liga/país seleccionado
+  list = list.map((u, i) => ({ ...u, rank: i + 1 }));
+  renderPodium(list.slice(0, 3));
+  renderBoard(list);
+}
+
+els.countrySelect.addEventListener('change', () => {
+  state.country = els.countrySelect.value;
+  els.countryFlag.textContent = state.country ? countryFlag(state.country) : '🌍';
+  applyFilters();
+});
 
 /* ----------------------------------------------------------
    Podio
@@ -79,7 +180,7 @@ function renderPodium(top3) {
         <img class="podium-avatar" src="${esc(u.avatar) || FALLBACK_AVATAR}" alt="" loading="lazy"
              onerror="this.src='${FALLBACK_AVATAR}'" />
         <h2 class="podium-name">${esc(u.nickname || u.username)}</h2>
-        <p class="podium-user">@${esc(u.username)}</p>
+        <p class="podium-user">@${esc(u.username)}${u.region ? ' · ' + countryFlag(u.region) : ''}</p>
         <p class="podium-score" data-count="${u.score}">0<small>PUNTOS</small></p>
       </article>`
     )
@@ -110,7 +211,7 @@ function renderBoard(users) {
                onerror="this.src='${FALLBACK_AVATAR}'" />
           <span class="row-names">
             <span class="row-nick">${esc(u.nickname || u.username)}</span>
-            <span class="row-handle">@${esc(u.username)}</span>
+            <span class="row-handle">${u.region ? countryFlag(u.region) + ' ' : ''}@${esc(u.username)}</span>
           </span>
         </span>
         <span class="col-score">${fmt.format(u.score)}</span>
@@ -121,13 +222,7 @@ function renderBoard(users) {
     .join('');
 }
 
-els.search.addEventListener('input', () => {
-  const q = els.search.value.trim().toLowerCase();
-  const filtered = q
-    ? state.users.filter((u) => u.username.toLowerCase().includes(q) || (u.nickname || '').toLowerCase().includes(q))
-    : state.users;
-  renderBoard(filtered);
-});
+els.search.addEventListener('input', applyFilters);
 
 /* ----------------------------------------------------------
    Contadores animados
