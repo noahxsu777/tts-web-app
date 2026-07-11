@@ -61,6 +61,17 @@
     return false;
   }
 
+  function canControlPlayback() {
+    return state.myRole === 'host' || state.myRole === 'moderator';
+  }
+
+  // Only host/moderator get native seek/play controls — the server enforces
+  // this regardless, but hiding them avoids guests clicking a control that
+  // just snaps back.
+  function updatePlaybackControlsUi() {
+    videoElement.controls = canControlPlayback();
+  }
+
   let ytPlayer = null;
   let ytReady = false;
   let pendingYt = null;
@@ -72,12 +83,14 @@
   // ---- WebRTC state ----
   const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
   const peers = new Map(); // remoteId -> { pc, polite, makingOffer, ignoreOffer }
-  const remoteStreamKind = new Map(); // `${remoteId}/${streamId}` -> 'cam' | 'screen'
+  const remoteStreamKind = new Map(); // `${remoteId}/${streamId}` -> 'cam' | 'screen' | 'mic'
   let localCamStream = null;
   let localScreenStream = null;
+  let localMicStream = null; // mic-only stream, independent of the camera
   let camOn = false;
-  let micMuted = false;
   let screenOn = false;
+  let micPressed = false; // the push-to-talk button is currently held down
+  let micAcquiring = false;
 
   // ---- Hyperbeam (shared virtual browser) state ----
   let HyperbeamCtor = null;
@@ -130,9 +143,13 @@
   function enterRoom(roomId, name) {
     socket.emit('join-room', { roomId, name }, (res) => {
       if (!res || res.error) {
-        showError(res && res.error === 'kicked'
+        // showToast so this is visible even when re-called from a reconnect,
+        // where the (hidden) landing screen's error text wouldn't be seen.
+        const message = res && res.error === 'kicked'
           ? 'Fuiste expulsado de esta sala y no puedes volver a entrar con ese nombre.'
-          : 'No se pudo unir a la sala. Verifica el código.');
+          : 'No se pudo unir a la sala. Verifica el código.';
+        showError(message);
+        showToast(message);
         return;
       }
       state.roomId = res.roomId;
@@ -225,7 +242,7 @@
       const badges = document.createElement('span');
       badges.className = 'person-badges';
       if (u.cam) badges.appendChild(document.createTextNode('🎥'));
-      if (u.mic === false && u.cam) badges.appendChild(document.createTextNode('🔇'));
+      if (u.mic) badges.appendChild(document.createTextNode('🎙️'));
       if (u.screen) badges.appendChild(document.createTextNode('🖥️'));
       li.appendChild(badges);
 
@@ -492,6 +509,7 @@
     state.video = video;
     videoEmpty.classList.add('hidden');
     destroyPlayers();
+    updatePlaybackControlsUi();
 
     if (video.type === 'youtube') {
       youtubeWrapper.classList.remove('hidden');
@@ -516,20 +534,37 @@
     }
   }
 
+  // hls.js is only fetched the first time someone actually loads a live channel —
+  // a static <script> tag for it previously blocked the whole page's initial JS
+  // (including the YouTube IFrame API wiring) behind a third-party CDN request.
+  let HlsCtor = null;
+  async function loadHlsSdk() {
+    if (HlsCtor) return HlsCtor;
+    const mod = await import('https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.mjs');
+    HlsCtor = mod.default;
+    return HlsCtor;
+  }
+
   // Live channels have no fixed timeline, so this only starts playback at the
   // live edge — it never seeks to a startTime the way on-demand video does.
-  function startHls(url, playing) {
+  async function startHls(url, playing) {
     const playIfNeeded = () => {
       if (!playing) return;
       suppressVideoEl = true;
       videoElement.play().catch(() => {}).finally(() => { suppressVideoEl = false; });
     };
-    if (window.Hls && window.Hls.isSupported()) {
-      hlsInstance = new window.Hls({ liveDurationInfinity: true });
-      hlsInstance.on(window.Hls.Events.ERROR, (_evt, data) => {
+    let Hls;
+    try {
+      Hls = await loadHlsSdk();
+    } catch (err) {
+      console.error('Failed to load hls.js', err);
+    }
+    if (Hls && Hls.isSupported()) {
+      hlsInstance = new Hls({ liveDurationInfinity: true });
+      hlsInstance.on(Hls.Events.ERROR, (_evt, data) => {
         if (data.fatal) showToast('No se pudo cargar el canal en vivo (HLS).');
       });
-      hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, playIfNeeded);
+      hlsInstance.on(Hls.Events.MANIFEST_PARSED, playIfNeeded);
       hlsInstance.loadSource(url);
       hlsInstance.attachMedia(videoElement);
     } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
@@ -562,6 +597,10 @@
         rel: 0,
         modestbranding: 1,
         origin: location.origin,
+        // Guests get a read-only player — no seek bar, no keyboard scrubbing —
+        // since only host/moderator can control playback (enforced server-side too).
+        controls: canControlPlayback() ? 1 : 0,
+        disablekb: canControlPlayback() ? 0 : 1,
       },
       events: {
         onReady: () => {
@@ -636,6 +675,26 @@
     }, 4000);
   }
 
+  // Mobile OSes/browsers routinely pause video (and can drop the socket
+  // entirely) once a tab is backgrounded; catch up as soon as the user is back.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state.roomId) {
+      socket.emit('request-sync', { roomId: state.roomId });
+    }
+  });
+  window.addEventListener('focus', () => {
+    if (state.roomId) socket.emit('request-sync', { roomId: state.roomId });
+  });
+
+  // socket.io issues a new socket id on every reconnect, so a dropped
+  // connection also drops us out of the room server-side — rejoin from
+  // scratch so users/video/vbrowser all come back in sync.
+  socket.on('connect', () => {
+    if (!state.roomId) return; // first connection — the join buttons handle this
+    const name = localStorage.getItem('wp_name') || 'Guest';
+    enterRoom(state.roomId, name);
+  });
+
   // ---- Socket events ----
   socket.on('user-joined', (u) => {
     if (!state.users.find((x) => x.id === u.id)) state.users.push(u);
@@ -655,7 +714,10 @@
   socket.on('user-list', (users) => {
     state.users = users;
     const me = users.find((u) => u.id === state.myId);
-    if (me) state.myRole = me.role;
+    if (me && me.role !== state.myRole) {
+      state.myRole = me.role;
+      updatePlaybackControlsUi();
+    }
     renderPeople();
   });
 
@@ -758,6 +820,28 @@
     upsertTile('local', kind, stream, kind === 'cam' ? 'Tú' : 'Tu pantalla', { muted: true });
   }
 
+  // Mic-only audio has nothing to show, so it plays through a hidden <audio>
+  // element instead of a video-tile box.
+  function upsertAudioTile(ownerId, stream) {
+    const id = `audio-${ownerId}`;
+    let audio = document.getElementById(id);
+    if (!audio) {
+      audio = document.createElement('audio');
+      audio.id = id;
+      audio.autoplay = true;
+      audio.hidden = true;
+      document.body.appendChild(audio);
+    }
+    if (audio.srcObject !== stream) audio.srcObject = stream;
+  }
+
+  function removeAudioTile(ownerId) {
+    const audio = document.getElementById(`audio-${ownerId}`);
+    if (!audio) return;
+    audio.srcObject = null;
+    audio.remove();
+  }
+
   function addStreamToPeer(pc, stream, remoteId, kind) {
     stream.getTracks().forEach((track) => pc.addTrack(track, stream));
     socket.emit('rtc-signal', {
@@ -802,6 +886,11 @@
       const stream = event.streams[0];
       if (!stream) return;
       const kind = remoteStreamKind.get(`${remoteId}/${stream.id}`) || 'cam';
+      if (kind === 'mic') {
+        upsertAudioTile(remoteId, stream);
+        event.track.onended = () => removeAudioTile(remoteId);
+        return;
+      }
       const user = state.users.find((u) => u.id === remoteId);
       const label = (user ? user.name : 'Alguien') + (kind === 'screen' ? ' (pantalla)' : '');
       upsertTile(remoteId, kind, stream, label);
@@ -810,6 +899,7 @@
 
     if (localCamStream) addStreamToPeer(pc, localCamStream, remoteId, 'cam');
     if (localScreenStream) addStreamToPeer(pc, localScreenStream, remoteId, 'screen');
+    if (localMicStream) addStreamToPeer(pc, localMicStream, remoteId, 'mic');
 
     return entry;
   }
@@ -822,6 +912,7 @@
     }
     removeTile(remoteId, 'cam');
     removeTile(remoteId, 'screen');
+    removeAudioTile(remoteId);
     [...remoteStreamKind.keys()].forEach((k) => { if (k.startsWith(`${remoteId}/`)) remoteStreamKind.delete(k); });
   }
 
@@ -834,7 +925,8 @@
       // Explicit "I stopped sharing" notice — a remote track's transceiver
       // going inactive on renegotiation does NOT reliably fire the track's
       // 'ended' event in every browser, so we can't depend on that alone.
-      removeTile(from, signal.streamEnded.kind);
+      if (signal.streamEnded.kind === 'mic') removeAudioTile(from);
+      else removeTile(from, signal.streamEnded.kind);
       return;
     }
     const entry = ensurePeer(from);
@@ -871,19 +963,26 @@
       showToast('No se pudo acceder a la cámara/micrófono.');
       return;
     }
+    // Camera audio starts muted — talking is always push-to-talk via the mic
+    // button, whether or not the camera is on.
+    stream.getAudioTracks().forEach((t) => { t.enabled = false; });
+    if (localMicStream) {
+      stopTalking();
+      peers.forEach((entry) => removeStreamFromPeer(entry.pc, localMicStream));
+      localMicStream.getTracks().forEach((t) => t.stop());
+      localMicStream = null;
+    }
     localCamStream = stream;
     camOn = true;
-    micMuted = false;
     camBtn.classList.add('active');
-    micBtn.disabled = false;
-    micBtn.classList.remove('muted');
     renderLocalTile('cam');
     peers.forEach((entry, remoteId) => addStreamToPeer(entry.pc, localCamStream, remoteId, 'cam'));
-    socket.emit('media-state', { roomId: state.roomId, cam: true, mic: true });
+    socket.emit('media-state', { roomId: state.roomId, cam: true });
   }
 
   function stopCam() {
     if (!localCamStream) return;
+    const wasTalkingViaCam = micPressed && !localMicStream;
     peers.forEach((entry, remoteId) => {
       removeStreamFromPeer(entry.pc, localCamStream);
       socket.emit('rtc-signal', { roomId: state.roomId, to: remoteId, signal: { streamEnded: { kind: 'cam' } } });
@@ -891,20 +990,64 @@
     localCamStream.getTracks().forEach((t) => t.stop());
     localCamStream = null;
     camOn = false;
-    micMuted = false;
     camBtn.classList.remove('active');
-    micBtn.disabled = true;
-    micBtn.classList.remove('muted');
     removeTile('local', 'cam');
-    socket.emit('media-state', { roomId: state.roomId, cam: false, mic: false });
+    socket.emit('media-state', { roomId: state.roomId, cam: false });
+    if (wasTalkingViaCam) {
+      micPressed = false;
+      micBtn.classList.remove('talking');
+      socket.emit('media-state', { roomId: state.roomId, mic: false });
+    }
   }
 
-  function toggleMic() {
-    if (!localCamStream) return;
-    micMuted = !micMuted;
-    localCamStream.getAudioTracks().forEach((t) => { t.enabled = !micMuted; });
-    micBtn.classList.toggle('muted', micMuted);
-    socket.emit('media-state', { roomId: state.roomId, mic: !micMuted });
+  // Whichever mic is currently in use — the camera's own audio track takes
+  // priority over the mic-only stream so there's never more than one active.
+  function activeMicTrack() {
+    if (localCamStream) {
+      const track = localCamStream.getAudioTracks()[0];
+      if (track) return track;
+    }
+    return localMicStream ? localMicStream.getAudioTracks()[0] : null;
+  }
+
+  // Push-to-talk: holding the mic button unmutes the active mic track (acquiring
+  // a mic-only stream on first use if there's no camera running yet); releasing
+  // mutes it again. Nothing is torn down between presses so repeated taps are instant.
+  async function startTalking() {
+    if (micPressed) return;
+    micPressed = true;
+    let track = activeMicTrack();
+    if (!track && !micAcquiring) {
+      micAcquiring = true;
+      try {
+        localMicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        showToast('No se pudo acceder al micrófono.');
+        micAcquiring = false;
+        micPressed = false;
+        return;
+      }
+      micAcquiring = false;
+      peers.forEach((entry, remoteId) => addStreamToPeer(entry.pc, localMicStream, remoteId, 'mic'));
+      track = localMicStream.getAudioTracks()[0];
+    }
+    if (!micPressed) { // released while the mic stream was still being acquired
+      if (track) track.enabled = false;
+      return;
+    }
+    if (track) track.enabled = true;
+    micBtn.classList.add('talking');
+    socket.emit('media-state', { roomId: state.roomId, mic: true });
+  }
+
+  function stopTalking() {
+    if (!micPressed) return;
+    micPressed = false;
+    if (micAcquiring) return; // startTalking() will mute the track once it arrives
+    const track = activeMicTrack();
+    if (track) track.enabled = false;
+    micBtn.classList.remove('talking');
+    socket.emit('media-state', { roomId: state.roomId, mic: false });
   }
 
   async function toggleScreen() {
@@ -939,8 +1082,14 @@
   }
 
   camBtn.addEventListener('click', toggleCam);
-  micBtn.addEventListener('click', toggleMic);
   screenBtn.addEventListener('click', toggleScreen);
+
+  ['mousedown', 'touchstart'].forEach((evt) => {
+    micBtn.addEventListener(evt, (e) => { e.preventDefault(); startTalking(); }, { passive: false });
+  });
+  ['mouseup', 'mouseleave', 'touchend', 'touchcancel'].forEach((evt) => {
+    micBtn.addEventListener(evt, () => stopTalking());
+  });
 
   // ==================================================================
   // Hyperbeam — shared virtual browser (https://hyperbeam.com)
@@ -983,7 +1132,7 @@
     }
     vbrowserActive = true;
     vbrowserBtn.classList.add('active');
-    vbrowserBtn.querySelector('span').textContent = 'Cerrar navegador';
+    vbrowserBtn.querySelector('.call-btn-label').textContent = 'Cerrar navegador';
   }
 
   function teardownHyperbeam() {
@@ -993,7 +1142,7 @@
     }
     vbrowserActive = false;
     vbrowserBtn.classList.remove('active');
-    vbrowserBtn.querySelector('span').textContent = 'Navegador';
+    vbrowserBtn.querySelector('.call-btn-label').textContent = 'Navegador';
     hideBrowserStage();
   }
 

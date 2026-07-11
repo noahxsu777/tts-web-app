@@ -190,6 +190,10 @@ function canModerate(actorRole, targetRole) {
   return false;
 }
 
+function canControlPlayback(role) {
+  return role === 'host' || role === 'moderator';
+}
+
 function estimatedCurrentTime(room) {
   if (!room.isPlaying) return room.currentTime;
   const elapsed = (Date.now() - room.lastUpdate) / 1000;
@@ -429,9 +433,17 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Guests can pick what to watch (set-video) but only the host/moderators can
+  // control an already-loaded video; an unauthorized attempt just snaps that
+  // one socket back to the room's authoritative state instead of being applied.
+  function rejectPlaybackControl(room) {
+    socket.emit(room.isPlaying ? 'play' : 'pause', { currentTime: estimatedCurrentTime(room) });
+  }
+
   socket.on('play', ({ roomId, currentTime }) => {
     const room = rooms.get(roomId);
     if (!room) return;
+    if (!canControlPlayback(room.users.get(socket.id)?.role)) { rejectPlaybackControl(room); return; }
     room.isPlaying = true;
     room.currentTime = currentTime || 0;
     room.lastUpdate = Date.now();
@@ -441,6 +453,7 @@ io.on('connection', (socket) => {
   socket.on('pause', ({ roomId, currentTime }) => {
     const room = rooms.get(roomId);
     if (!room) return;
+    if (!canControlPlayback(room.users.get(socket.id)?.role)) { rejectPlaybackControl(room); return; }
     room.isPlaying = false;
     room.currentTime = currentTime || 0;
     room.lastUpdate = Date.now();
@@ -450,9 +463,20 @@ io.on('connection', (socket) => {
   socket.on('seek', ({ roomId, currentTime }) => {
     const room = rooms.get(roomId);
     if (!room) return;
+    if (!canControlPlayback(room.users.get(socket.id)?.role)) { rejectPlaybackControl(room); return; }
     room.currentTime = currentTime || 0;
     room.lastUpdate = Date.now();
     socket.to(roomId).emit('seek', { currentTime: room.currentTime });
+  });
+
+  // A client asks for this after coming back from being backgrounded/hidden,
+  // since mobile OSes/browsers routinely pause video while a tab isn't visible —
+  // it snaps that one socket back to the room's current authoritative state.
+  socket.on('request-sync', ({ roomId }, cb) => {
+    const room = rooms.get(roomId);
+    if (!room) { if (typeof cb === 'function') cb({ error: 'Sala no encontrada.' }); return; }
+    socket.emit(room.isPlaying ? 'play' : 'pause', { currentTime: estimatedCurrentTime(room) });
+    if (typeof cb === 'function') cb({ ok: true });
   });
 
   socket.on('sync-time', ({ roomId, currentTime }) => {

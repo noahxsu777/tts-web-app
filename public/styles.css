@@ -546,6 +546,21 @@ input {
   font-weight: 600;
 }
 
+.call-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.call-btn-icon svg { display: block; }
+
+/* The diagonal "off" stroke is shown by default and hidden once a control is
+   active/talking — one SVG per icon covers both states, no JS icon-swapping. */
+.call-btn-icon .off-slash { opacity: 1; transition: opacity 0.15s ease; }
+.call-btn.active .call-btn-icon .off-slash,
+.call-btn.talking .call-btn-icon .off-slash { opacity: 0; }
+
 .call-btn:hover { background: rgba(255, 255, 255, 0.1); }
 
 .call-btn.active {
@@ -558,6 +573,13 @@ input {
   background: rgba(246, 108, 108, 0.15);
   border-color: rgba(246, 108, 108, 0.5);
   color: var(--text);
+}
+
+.call-btn.talking {
+  background: rgba(246, 108, 108, 0.22);
+  border-color: rgba(246, 108, 108, 0.7);
+  color: var(--text);
+  transform: scale(1.04);
 }
 
 .call-btn:disabled {
