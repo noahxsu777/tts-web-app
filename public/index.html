@@ -77,9 +77,11 @@
             <div class="video-empty-icon">🎬</div>
             <p>Pega un enlace de YouTube o de un video para empezar</p>
           </div>
-          <div id="youtube-player" class="video-fill hidden"></div>
+          <div id="youtube-player-wrapper" class="video-fill hidden"></div>
           <video id="video-player" class="video-fill hidden" controls playsinline></video>
+          <div id="hyperbeam-container" class="video-fill hidden"></div>
           <div id="reaction-layer" class="reaction-layer" aria-hidden="true"></div>
+          <div id="video-chat-strip" class="video-chat-strip"></div>
         </div>
 
         <form id="video-form" class="video-form">
@@ -87,13 +89,22 @@
           <button type="submit" class="btn btn-primary btn-compact">Cargar</button>
         </form>
 
-        <div class="reactions-bar">
-          <button class="reaction-btn" data-emoji="👍">👍</button>
-          <button class="reaction-btn" data-emoji="❤️">❤️</button>
-          <button class="reaction-btn" data-emoji="😂">😂</button>
-          <button class="reaction-btn" data-emoji="😮">😮</button>
-          <button class="reaction-btn" data-emoji="🎉">🎉</button>
-          <button class="reaction-btn" data-emoji="👏">👏</button>
+        <div class="controls-row">
+          <div class="call-controls">
+            <button id="cam-btn" class="call-btn" type="button" title="Cámara">🎥<span>Cámara</span></button>
+            <button id="mic-btn" class="call-btn" type="button" title="Micrófono" disabled>🎤<span>Mic</span></button>
+            <button id="screen-btn" class="call-btn" type="button" title="Compartir pantalla">🖥️<span>Pantalla</span></button>
+            <button id="vbrowser-btn" class="call-btn" type="button" title="Navegador virtual compartido">🌐<span>Navegador</span></button>
+          </div>
+
+          <div class="reactions-bar">
+            <button class="reaction-btn" data-emoji="👍">👍</button>
+            <button class="reaction-btn" data-emoji="❤️">❤️</button>
+            <button class="reaction-btn" data-emoji="😂">😂</button>
+            <button class="reaction-btn" data-emoji="😮">😮</button>
+            <button class="reaction-btn" data-emoji="🎉">🎉</button>
+            <button class="reaction-btn" data-emoji="👏">👏</button>
+          </div>
         </div>
       </section>
 

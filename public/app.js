@@ -17,11 +17,17 @@
   const leaveBtn = el('leave-btn');
 
   const videoEmpty = el('video-empty');
-  const youtubeContainer = el('youtube-player');
+  const youtubeWrapper = el('youtube-player-wrapper');
   const videoElement = el('video-player');
+  const hyperbeamContainer = el('hyperbeam-container');
   const reactionLayer = el('reaction-layer');
+  const videoChatStrip = el('video-chat-strip');
   const videoForm = el('video-form');
   const videoUrlInput = el('video-url-input');
+  const camBtn = el('cam-btn');
+  const micBtn = el('mic-btn');
+  const screenBtn = el('screen-btn');
+  const vbrowserBtn = el('vbrowser-btn');
 
   const chatMessages = el('chat-messages');
   const chatForm = el('chat-form');
@@ -49,6 +55,22 @@
   let suppressYt = false;
   let suppressVideoEl = false;
   let syncInterval = null;
+
+  // ---- WebRTC state ----
+  const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+  const peers = new Map(); // remoteId -> { pc, polite, makingOffer, ignoreOffer }
+  const remoteStreamKind = new Map(); // `${remoteId}/${streamId}` -> 'cam' | 'screen'
+  let localCamStream = null;
+  let localScreenStream = null;
+  let camOn = false;
+  let micMuted = false;
+  let screenOn = false;
+
+  // ---- Hyperbeam (shared virtual browser) state ----
+  let HyperbeamCtor = null;
+  let hyperbeamClient = null;
+  let vbrowserActive = false;
+  let vbrowserPending = false;
 
   window.onYouTubeIframeAPIReady = function () {
     ytReady = true;
@@ -108,6 +130,9 @@
       renderPeople();
       if (res.video) loadVideo(res.video, res.currentTime, res.isPlaying);
       startSyncLoop();
+
+      res.users.forEach((u) => { if (u.id !== state.myId) ensurePeer(u.id); });
+      if (res.vbrowser) mountHyperbeam(res.vbrowser.embedUrl);
     });
   }
 
@@ -171,6 +196,12 @@
         you.textContent = '(tú)';
         li.appendChild(you);
       }
+      const badges = document.createElement('span');
+      badges.className = 'person-badges';
+      if (u.cam) badges.appendChild(document.createTextNode('🎥'));
+      if (u.mic === false && u.cam) badges.appendChild(document.createTextNode('🔇'));
+      if (u.screen) badges.appendChild(document.createTextNode('🖥️'));
+      li.appendChild(badges);
       peopleList.appendChild(li);
     });
   }
@@ -243,9 +274,9 @@
     videoElement.pause();
     videoElement.removeAttribute('src');
     videoElement.load();
-    youtubeContainer.classList.add('hidden');
+    youtubeWrapper.classList.add('hidden');
     videoElement.classList.add('hidden');
-    youtubeContainer.innerHTML = '';
+    youtubeWrapper.innerHTML = '';
   }
 
   function loadVideo(video, startTime, playing) {
@@ -254,7 +285,7 @@
     destroyPlayers();
 
     if (video.type === 'youtube') {
-      youtubeContainer.classList.remove('hidden');
+      youtubeWrapper.classList.remove('hidden');
       if (ytReady) {
         createYoutubePlayer(video.youtubeId, startTime, playing);
       } else {
@@ -273,15 +304,30 @@
   }
 
   function createYoutubePlayer(videoId, startTime, playing) {
-    ytPlayer = new YT.Player('youtube-player', {
+    // The IFrame API replaces (and can destroy) the target element outright, so a
+    // fresh child element is created on every load instead of reusing a fixed id —
+    // reusing one broke loading a second/different video after the first destroy().
+    youtubeWrapper.innerHTML = '';
+    const target = document.createElement('div');
+    target.id = `yt-target-${Date.now()}`;
+    youtubeWrapper.appendChild(target);
+
+    ytPlayer = new YT.Player(target.id, {
       videoId,
-      playerVars: { autoplay: playing ? 1 : 0, start: Math.floor(startTime || 0), rel: 0, modestbranding: 1 },
+      playerVars: {
+        autoplay: playing ? 1 : 0,
+        start: Math.floor(startTime || 0),
+        rel: 0,
+        modestbranding: 1,
+        origin: location.origin,
+      },
       events: {
         onReady: () => {
           if (startTime) ytPlayer.seekTo(startTime, true);
           if (playing) ytPlayer.playVideo();
         },
         onStateChange: onYtStateChange,
+        onError: onYtError,
       },
     });
   }
@@ -293,6 +339,20 @@
     } else if (e.data === YT.PlayerState.PAUSED) {
       socket.emit('pause', { roomId: state.roomId, currentTime: ytPlayer.getCurrentTime() });
     }
+  }
+
+  function onYtError(e) {
+    const messages = {
+      2: 'Enlace de YouTube inválido.',
+      5: 'Este video no se puede reproducir embebido.',
+      100: 'Video no encontrado o es privado.',
+      101: 'El propietario no permite reproducir este video en otros sitios.',
+      150: 'El propietario no permite reproducir este video en otros sitios.',
+    };
+    showToast(messages[e.data] || 'No se pudo cargar el video de YouTube.');
+    videoEmpty.classList.remove('hidden');
+    destroyPlayers();
+    state.video = null;
   }
 
   function attachVideoElementHandlers() {
@@ -337,6 +397,7 @@
     if (!state.users.find((x) => x.id === u.id)) state.users.push(u);
     renderPeople();
     appendChatMessage({ system: true, message: `${u.name} se unió a la sala` });
+    ensurePeer(u.id);
   });
 
   socket.on('user-left', ({ id }) => {
@@ -344,6 +405,7 @@
     state.users = state.users.filter((x) => x.id !== id);
     renderPeople();
     if (u) appendChatMessage({ system: true, message: `${u.name} salió de la sala` });
+    closePeer(id);
   });
 
   socket.on('user-list', (users) => {
@@ -394,6 +456,316 @@
 
   socket.on('chat', ({ name, color, message }) => appendChatMessage({ name, color, message }));
   socket.on('reaction', ({ emoji }) => spawnReaction(emoji));
+
+  // ==================================================================
+  // WebRTC — mesh camera / mic / screen-share between everyone in a room
+  // ==================================================================
+
+  function tileId(ownerId, kind) {
+    return `tile-${ownerId}-${kind}`;
+  }
+
+  function upsertTile(ownerId, kind, stream, label, { muted } = {}) {
+    const id = tileId(ownerId, kind);
+    let tile = document.getElementById(id);
+    if (!tile) {
+      tile = document.createElement('div');
+      tile.id = id;
+      tile.className = 'video-tile' + (kind === 'screen' ? ' screen' : '');
+      const video = document.createElement('video');
+      video.autoplay = true;
+      video.playsInline = true;
+      if (muted) video.muted = true;
+      tile.appendChild(video);
+      const labelEl = document.createElement('div');
+      labelEl.className = 'video-tile-label';
+      tile.appendChild(labelEl);
+      videoChatStrip.appendChild(tile);
+    }
+    const video = tile.querySelector('video');
+    if (video.srcObject !== stream) video.srcObject = stream;
+    tile.querySelector('.video-tile-label').textContent = label;
+    return tile;
+  }
+
+  function removeTile(ownerId, kind) {
+    const tile = document.getElementById(tileId(ownerId, kind));
+    if (!tile) return;
+    const video = tile.querySelector('video');
+    if (video) video.srcObject = null;
+    tile.remove();
+  }
+
+  function renderLocalTile(kind) {
+    const stream = kind === 'cam' ? localCamStream : localScreenStream;
+    if (!stream) return;
+    upsertTile('local', kind, stream, kind === 'cam' ? 'Tú' : 'Tu pantalla', { muted: true });
+  }
+
+  function addStreamToPeer(pc, stream, remoteId, kind) {
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    socket.emit('rtc-signal', {
+      roomId: state.roomId,
+      to: remoteId,
+      signal: { streamKind: { streamId: stream.id, kind } },
+    });
+  }
+
+  function removeStreamFromPeer(pc, stream) {
+    const trackIds = new Set(stream.getTracks().map((t) => t.id));
+    pc.getSenders().forEach((sender) => {
+      if (sender.track && trackIds.has(sender.track.id)) pc.removeTrack(sender);
+    });
+  }
+
+  function ensurePeer(remoteId) {
+    let entry = peers.get(remoteId);
+    if (entry) return entry;
+
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    entry = { pc, polite: state.myId < remoteId, makingOffer: false, ignoreOffer: false };
+    peers.set(remoteId, entry);
+
+    pc.onnegotiationneeded = async () => {
+      try {
+        entry.makingOffer = true;
+        await pc.setLocalDescription();
+        socket.emit('rtc-signal', { roomId: state.roomId, to: remoteId, signal: { description: pc.localDescription } });
+      } catch (err) {
+        console.error('negotiation error', err);
+      } finally {
+        entry.makingOffer = false;
+      }
+    };
+
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) socket.emit('rtc-signal', { roomId: state.roomId, to: remoteId, signal: { candidate } });
+    };
+
+    pc.ontrack = (event) => {
+      const stream = event.streams[0];
+      if (!stream) return;
+      const kind = remoteStreamKind.get(`${remoteId}/${stream.id}`) || 'cam';
+      const user = state.users.find((u) => u.id === remoteId);
+      const label = (user ? user.name : 'Alguien') + (kind === 'screen' ? ' (pantalla)' : '');
+      upsertTile(remoteId, kind, stream, label);
+      event.track.onended = () => removeTile(remoteId, kind);
+    };
+
+    if (localCamStream) addStreamToPeer(pc, localCamStream, remoteId, 'cam');
+    if (localScreenStream) addStreamToPeer(pc, localScreenStream, remoteId, 'screen');
+
+    return entry;
+  }
+
+  function closePeer(remoteId) {
+    const entry = peers.get(remoteId);
+    if (entry) {
+      entry.pc.close();
+      peers.delete(remoteId);
+    }
+    removeTile(remoteId, 'cam');
+    removeTile(remoteId, 'screen');
+    [...remoteStreamKind.keys()].forEach((k) => { if (k.startsWith(`${remoteId}/`)) remoteStreamKind.delete(k); });
+  }
+
+  socket.on('rtc-signal', async ({ from, signal }) => {
+    if (signal.streamKind) {
+      remoteStreamKind.set(`${from}/${signal.streamKind.streamId}`, signal.streamKind.kind);
+      return;
+    }
+    if (signal.streamEnded) {
+      // Explicit "I stopped sharing" notice — a remote track's transceiver
+      // going inactive on renegotiation does NOT reliably fire the track's
+      // 'ended' event in every browser, so we can't depend on that alone.
+      removeTile(from, signal.streamEnded.kind);
+      return;
+    }
+    const entry = ensurePeer(from);
+    const { pc } = entry;
+    try {
+      if (signal.description) {
+        const offerCollision = signal.description.type === 'offer' &&
+          (entry.makingOffer || pc.signalingState !== 'stable');
+        entry.ignoreOffer = !entry.polite && offerCollision;
+        if (entry.ignoreOffer) return;
+        await pc.setRemoteDescription(signal.description);
+        if (signal.description.type === 'offer') {
+          await pc.setLocalDescription();
+          socket.emit('rtc-signal', { roomId: state.roomId, to: from, signal: { description: pc.localDescription } });
+        }
+      } else if (signal.candidate) {
+        try {
+          await pc.addIceCandidate(signal.candidate);
+        } catch (err) {
+          if (!entry.ignoreOffer) throw err;
+        }
+      }
+    } catch (err) {
+      console.error('rtc-signal handling error', err);
+    }
+  });
+
+  async function toggleCam() {
+    if (camOn) { stopCam(); return; }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    } catch (err) {
+      showToast('No se pudo acceder a la cámara/micrófono.');
+      return;
+    }
+    localCamStream = stream;
+    camOn = true;
+    micMuted = false;
+    camBtn.classList.add('active');
+    micBtn.disabled = false;
+    micBtn.classList.remove('muted');
+    renderLocalTile('cam');
+    peers.forEach((entry, remoteId) => addStreamToPeer(entry.pc, localCamStream, remoteId, 'cam'));
+    socket.emit('media-state', { roomId: state.roomId, cam: true, mic: true });
+  }
+
+  function stopCam() {
+    if (!localCamStream) return;
+    peers.forEach((entry, remoteId) => {
+      removeStreamFromPeer(entry.pc, localCamStream);
+      socket.emit('rtc-signal', { roomId: state.roomId, to: remoteId, signal: { streamEnded: { kind: 'cam' } } });
+    });
+    localCamStream.getTracks().forEach((t) => t.stop());
+    localCamStream = null;
+    camOn = false;
+    micMuted = false;
+    camBtn.classList.remove('active');
+    micBtn.disabled = true;
+    micBtn.classList.remove('muted');
+    removeTile('local', 'cam');
+    socket.emit('media-state', { roomId: state.roomId, cam: false, mic: false });
+  }
+
+  function toggleMic() {
+    if (!localCamStream) return;
+    micMuted = !micMuted;
+    localCamStream.getAudioTracks().forEach((t) => { t.enabled = !micMuted; });
+    micBtn.classList.toggle('muted', micMuted);
+    socket.emit('media-state', { roomId: state.roomId, mic: !micMuted });
+  }
+
+  async function toggleScreen() {
+    if (screenOn) { stopScreen(); return; }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    } catch (err) {
+      return; // user cancelled the native picker
+    }
+    localScreenStream = stream;
+    screenOn = true;
+    screenBtn.classList.add('active');
+    renderLocalTile('screen');
+    peers.forEach((entry, remoteId) => addStreamToPeer(entry.pc, localScreenStream, remoteId, 'screen'));
+    socket.emit('media-state', { roomId: state.roomId, screen: true });
+    stream.getVideoTracks()[0].onended = () => stopScreen();
+  }
+
+  function stopScreen() {
+    if (!localScreenStream) return;
+    peers.forEach((entry, remoteId) => {
+      removeStreamFromPeer(entry.pc, localScreenStream);
+      socket.emit('rtc-signal', { roomId: state.roomId, to: remoteId, signal: { streamEnded: { kind: 'screen' } } });
+    });
+    localScreenStream.getTracks().forEach((t) => t.stop());
+    localScreenStream = null;
+    screenOn = false;
+    screenBtn.classList.remove('active');
+    removeTile('local', 'screen');
+    socket.emit('media-state', { roomId: state.roomId, screen: false });
+  }
+
+  camBtn.addEventListener('click', toggleCam);
+  micBtn.addEventListener('click', toggleMic);
+  screenBtn.addEventListener('click', toggleScreen);
+
+  // ==================================================================
+  // Hyperbeam — shared virtual browser (https://hyperbeam.com)
+  // ==================================================================
+
+  async function loadHyperbeamSdk() {
+    if (HyperbeamCtor) return HyperbeamCtor;
+    const mod = await import('https://unpkg.com/@hyperbeam/web@latest/dist/index.js');
+    HyperbeamCtor = mod.default;
+    return HyperbeamCtor;
+  }
+
+  function showBrowserStage() {
+    videoEmpty.classList.add('hidden');
+    youtubeWrapper.classList.add('hidden');
+    if (state.video?.type === 'video') videoElement.pause();
+    videoElement.classList.add('hidden');
+    hyperbeamContainer.classList.remove('hidden');
+  }
+
+  function hideBrowserStage() {
+    hyperbeamContainer.classList.add('hidden');
+    hyperbeamContainer.innerHTML = '';
+    if (state.video?.type === 'youtube') youtubeWrapper.classList.remove('hidden');
+    else if (state.video?.type === 'video') videoElement.classList.remove('hidden');
+    else videoEmpty.classList.remove('hidden');
+  }
+
+  async function mountHyperbeam(embedUrl, adminToken) {
+    if (hyperbeamClient) return;
+    showBrowserStage();
+    try {
+      const Hyperbeam = await loadHyperbeamSdk();
+      hyperbeamClient = await Hyperbeam(hyperbeamContainer, embedUrl, adminToken ? { adminToken } : {});
+    } catch (err) {
+      console.error('Hyperbeam mount failed', err);
+      showToast('No se pudo cargar el navegador virtual.');
+      hideBrowserStage();
+      return;
+    }
+    vbrowserActive = true;
+    vbrowserBtn.classList.add('active');
+    vbrowserBtn.querySelector('span').textContent = 'Cerrar navegador';
+  }
+
+  function teardownHyperbeam() {
+    if (hyperbeamClient) {
+      try { hyperbeamClient.destroy(); } catch (err) { /* noop */ }
+      hyperbeamClient = null;
+    }
+    vbrowserActive = false;
+    vbrowserBtn.classList.remove('active');
+    vbrowserBtn.querySelector('span').textContent = 'Navegador';
+    hideBrowserStage();
+  }
+
+  vbrowserBtn.addEventListener('click', () => {
+    if (vbrowserPending) return;
+    if (vbrowserActive) {
+      vbrowserBtn.disabled = true;
+      socket.emit('vbrowser-stop', { roomId: state.roomId }, () => {
+        vbrowserBtn.disabled = false;
+        teardownHyperbeam();
+      });
+      return;
+    }
+    vbrowserPending = true;
+    vbrowserBtn.disabled = true;
+    socket.emit('vbrowser-start', { roomId: state.roomId }, async (res) => {
+      vbrowserPending = false;
+      vbrowserBtn.disabled = false;
+      if (!res || res.error) {
+        showToast(res?.error || 'No se pudo iniciar el navegador virtual.');
+        return;
+      }
+      await mountHyperbeam(res.embedUrl, res.adminToken);
+    });
+  });
+
+  socket.on('vbrowser-started', ({ embedUrl }) => mountHyperbeam(embedUrl));
+  socket.on('vbrowser-stopped', () => teardownHyperbeam());
 
   // ---- Auto-join from shared link ----
   const roomMatch = location.pathname.match(/^\/room\/([A-Za-z0-9]{4,8})/);

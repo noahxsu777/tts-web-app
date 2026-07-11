@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import http from 'http';
 import path from 'path';
@@ -6,12 +7,51 @@ import { Server } from 'socket.io';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 8080;
+const HYPERBEAM_API_KEY = process.env.HYPERBEAM_API_KEY || '';
+const HYPERBEAM_API_BASE = 'https://engine.hyperbeam.com/v0';
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+/**
+ * Starts a shared Hyperbeam virtual-browser VM. Returns the raw REST response
+ * ({ session_id, embed_url, admin_token }, per Hyperbeam's REST API docs at
+ * https://docs.hyperbeam.com/rest-api). timeout.inactive is a safety net so a
+ * forgotten session doesn't keep billing if our own cleanup logic ever misses it.
+ */
+async function startHyperbeamSession() {
+  if (!HYPERBEAM_API_KEY) {
+    throw new Error('missing-api-key');
+  }
+  const res = await fetch(`${HYPERBEAM_API_BASE}/vm`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${HYPERBEAM_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ timeout: { inactive: 600 } }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`hyperbeam-${res.status}: ${text.slice(0, 300)}`);
+  }
+  return res.json();
+}
+
+async function stopHyperbeamSession(sessionId) {
+  if (!HYPERBEAM_API_KEY || !sessionId) return;
+  try {
+    await fetch(`${HYPERBEAM_API_BASE}/vm/${sessionId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${HYPERBEAM_API_KEY}` },
+    });
+  } catch (err) {
+    console.error('Failed to stop Hyperbeam session', sessionId, err);
+  }
+}
 
 const ROOM_ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function generateRoomId() {
@@ -38,8 +78,9 @@ function colorForSocket(socketId) {
  *   isPlaying: boolean,
  *   currentTime: number,
  *   lastUpdate: number, // ms epoch, used to extrapolate currentTime for late joiners
- *   users: Map<socketId, { name, color }>,
+ *   users: Map<socketId, { name, color, cam, mic, screen }>,
  *   createdAt: number,
+ *   vbrowser: { sessionId, embedUrl } | null,
  * }>
  */
 const rooms = new Map();
@@ -54,6 +95,7 @@ function getOrCreateRoom(roomId) {
       lastUpdate: Date.now(),
       users: new Map(),
       createdAt: Date.now(),
+      vbrowser: null,
     };
     rooms.set(roomId, room);
   }
@@ -67,7 +109,14 @@ function estimatedCurrentTime(room) {
 }
 
 function roomUserList(room) {
-  return [...room.users.entries()].map(([id, u]) => ({ id, name: u.name, color: u.color }));
+  return [...room.users.entries()].map(([id, u]) => ({
+    id,
+    name: u.name,
+    color: u.color,
+    cam: !!u.cam,
+    mic: !!u.mic,
+    screen: !!u.screen,
+  }));
 }
 
 function parseVideoInput(input) {
@@ -106,7 +155,7 @@ io.on('connection', (socket) => {
 
     const safeName = (name || 'Guest').toString().slice(0, 24).trim() || 'Guest';
     const color = colorForSocket(socket.id);
-    room.users.set(socket.id, { name: safeName, color });
+    room.users.set(socket.id, { name: safeName, color, cam: false, mic: false, screen: false });
 
     if (typeof cb === 'function') {
       cb({
@@ -116,6 +165,7 @@ io.on('connection', (socket) => {
         isPlaying: room.isPlaying,
         currentTime: estimatedCurrentTime(room),
         users: roomUserList(room),
+        vbrowser: room.vbrowser ? { embedUrl: room.vbrowser.embedUrl } : null,
       });
     }
 
@@ -194,6 +244,64 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('reaction', { name: user.name, color: user.color, emoji });
   });
 
+  // ---- WebRTC (camera / mic / screen share) ----
+  socket.on('media-state', ({ roomId, cam, mic, screen }) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
+    const user = room.users.get(socket.id);
+    if (!user) return;
+    if (typeof cam === 'boolean') user.cam = cam;
+    if (typeof mic === 'boolean') user.mic = mic;
+    if (typeof screen === 'boolean') user.screen = screen;
+    io.to(roomId).emit('user-list', roomUserList(room));
+  });
+
+  // Relays WebRTC offers/answers/ICE candidates directly between two peers in
+  // the same room; the server never inspects the SDP/candidate payload.
+  socket.on('rtc-signal', ({ roomId, to, signal }) => {
+    const room = rooms.get(roomId);
+    if (!room || !room.users.has(socket.id) || !room.users.has(to)) return;
+    io.to(to).emit('rtc-signal', { from: socket.id, signal });
+  });
+
+  // ---- Shared virtual browser (Hyperbeam) ----
+  socket.on('vbrowser-start', async ({ roomId }, cb) => {
+    const room = rooms.get(roomId);
+    if (!room) { if (typeof cb === 'function') cb({ error: 'Sala no encontrada.' }); return; }
+    if (room.vbrowser) {
+      if (typeof cb === 'function') cb({ embedUrl: room.vbrowser.embedUrl });
+      return;
+    }
+    try {
+      const session = await startHyperbeamSession();
+      // Re-check the room still exists / is still empty of a session in case of a race.
+      if (!rooms.has(roomId) || rooms.get(roomId).vbrowser) {
+        stopHyperbeamSession(session.session_id);
+        if (typeof cb === 'function') cb({ embedUrl: rooms.get(roomId)?.vbrowser?.embedUrl });
+        return;
+      }
+      room.vbrowser = { sessionId: session.session_id, embedUrl: session.embed_url };
+      socket.to(roomId).emit('vbrowser-started', { embedUrl: session.embed_url });
+      if (typeof cb === 'function') cb({ embedUrl: session.embed_url, adminToken: session.admin_token });
+    } catch (err) {
+      console.error('vbrowser-start failed:', err.message);
+      const message = err.message === 'missing-api-key'
+        ? 'El navegador virtual no está configurado en el servidor (falta HYPERBEAM_API_KEY).'
+        : 'No se pudo iniciar el navegador virtual.';
+      if (typeof cb === 'function') cb({ error: message });
+    }
+  });
+
+  socket.on('vbrowser-stop', async ({ roomId }, cb) => {
+    const room = rooms.get(roomId);
+    if (!room || !room.vbrowser) { if (typeof cb === 'function') cb({ ok: true }); return; }
+    const sessionId = room.vbrowser.sessionId;
+    room.vbrowser = null;
+    io.to(roomId).emit('vbrowser-stopped');
+    if (typeof cb === 'function') cb({ ok: true });
+    await stopHyperbeamSession(sessionId);
+  });
+
   socket.on('disconnect', () => {
     if (!currentRoomId) return;
     const room = rooms.get(currentRoomId);
@@ -202,6 +310,10 @@ io.on('connection', (socket) => {
     socket.to(currentRoomId).emit('user-left', { id: socket.id });
     io.to(currentRoomId).emit('user-list', roomUserList(room));
     if (room.users.size === 0) {
+      if (room.vbrowser) {
+        stopHyperbeamSession(room.vbrowser.sessionId);
+        room.vbrowser = null;
+      }
       setTimeout(() => {
         const r = rooms.get(currentRoomId);
         if (r && r.users.size === 0) rooms.delete(currentRoomId);
