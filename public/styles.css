@@ -982,7 +982,7 @@ input {
   .why-grid { grid-template-columns: 1fr; }
   .why-section h2 { font-size: 22px; }
   .why-table-hint { display: block; }
-  .call-btn span { display: none; }
+  .call-btn-label { display: none; }
   .call-btn { padding: 8px 10px; font-size: 15px; }
   .controls-row {
     flex-wrap: nowrap;
