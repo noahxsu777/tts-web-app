@@ -1,7 +1,7 @@
 {
-  "name": "tts-web-app",
+  "name": "watchparty-clone",
   "version": "1.0.0",
-  "description": "TTS Web App con tik.tools API",
+  "description": "Ve videos de YouTube o de internet en sincronía con tus amigos, con chat y reacciones en vivo.",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -9,19 +9,17 @@
     "dev": "nodemon server.js",
     "build": "npm install"
   },
-  "keywords": ["tts", "text-to-speech", "api"],
+  "keywords": ["watchparty", "video-sync", "socket.io", "watch-together"],
   "author": "Noah",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
-    "axios": "^1.6.2"
+    "socket.io": "^4.7.5"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
   },
   "engines": {
-    "node": "18.x"
+    "node": ">=18"
   }
 }

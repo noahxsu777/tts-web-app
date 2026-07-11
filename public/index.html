@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WatchParty — Ve videos juntos</title>
+  <meta name="description" content="Crea una sala, comparte el enlace y ve videos de YouTube o de internet sincronizados con tus amigos, con chat en vivo." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍿</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+  <div id="bg-glow" aria-hidden="true"></div>
+
+  <!-- Landing -->
+  <main id="landing" class="landing">
+    <div class="landing-card">
+      <div class="brand">
+        <span class="brand-emoji">🍿</span>
+        <h1>Watch<span class="accent">Party</span></h1>
+      </div>
+      <p class="tagline">Ve videos de YouTube o de internet al mismo tiempo que tus amigos, con chat en vivo y reacciones.</p>
+
+      <label class="field-label" for="name-input">Tu nombre</label>
+      <input id="name-input" class="text-input" type="text" maxlength="24" placeholder="¿Cómo te llamas?" autocomplete="off" />
+
+      <div class="landing-actions">
+        <button id="create-room-btn" class="btn btn-primary">
+          <span>✨ Crear una sala</span>
+        </button>
+
+        <div class="divider"><span>o</span></div>
+
+        <div class="join-row">
+          <input id="join-code-input" class="text-input code-input" type="text" maxlength="6" placeholder="CÓDIGO" autocomplete="off" />
+          <button id="join-room-btn" class="btn btn-secondary">Unirme</button>
+        </div>
+      </div>
+
+      <p id="landing-error" class="error-text hidden"></p>
+
+      <ul class="feature-list">
+        <li>▶️ Reproducción sincronizada</li>
+        <li>💬 Chat en tiempo real</li>
+        <li>🎉 Reacciones al instante</li>
+        <li>🔗 Solo comparte el enlace</li>
+      </ul>
+    </div>
+  </main>
+
+  <!-- Room -->
+  <div id="room" class="room hidden">
+    <header class="room-header">
+      <div class="room-header-left">
+        <span class="brand-emoji small">🍿</span>
+        <span class="room-brand">WatchParty</span>
+      </div>
+      <div class="room-code-wrap">
+        <span class="room-code-label">Sala</span>
+        <button id="room-code-btn" class="room-code" title="Copiar enlace de invitación">
+          <span id="room-code-text">------</span>
+          <span class="copy-icon">🔗</span>
+        </button>
+      </div>
+      <div class="room-header-right">
+        <div id="avatar-stack" class="avatar-stack" title="Participantes"></div>
+        <button id="leave-btn" class="btn btn-ghost">Salir</button>
+      </div>
+    </header>
+
+    <div class="room-body">
+      <section class="video-section">
+        <div id="video-stage" class="video-stage">
+          <div id="video-empty" class="video-empty">
+            <div class="video-empty-icon">🎬</div>
+            <p>Pega un enlace de YouTube o de un video para empezar</p>
+          </div>
+          <div id="youtube-player" class="video-fill hidden"></div>
+          <video id="video-player" class="video-fill hidden" controls playsinline></video>
+          <div id="reaction-layer" class="reaction-layer" aria-hidden="true"></div>
+        </div>
+
+        <form id="video-form" class="video-form">
+          <input id="video-url-input" class="text-input" type="text" placeholder="Pega un enlace de YouTube o video (https://...)" autocomplete="off" />
+          <button type="submit" class="btn btn-primary btn-compact">Cargar</button>
+        </form>
+
+        <div class="reactions-bar">
+          <button class="reaction-btn" data-emoji="👍">👍</button>
+          <button class="reaction-btn" data-emoji="❤️">❤️</button>
+          <button class="reaction-btn" data-emoji="😂">😂</button>
+          <button class="reaction-btn" data-emoji="😮">😮</button>
+          <button class="reaction-btn" data-emoji="🎉">🎉</button>
+          <button class="reaction-btn" data-emoji="👏">👏</button>
+        </div>
+      </section>
+
+      <aside class="side-panel">
+        <div class="panel-tabs">
+          <button class="panel-tab active" data-tab="chat">💬 Chat</button>
+          <button class="panel-tab" data-tab="people">👥 Gente <span id="people-count">1</span></button>
+        </div>
+
+        <div id="tab-chat" class="panel-content">
+          <div id="chat-messages" class="chat-messages"></div>
+          <form id="chat-form" class="chat-form">
+            <input id="chat-input" class="text-input" type="text" maxlength="500" placeholder="Escribe un mensaje…" autocomplete="off" />
+            <button type="submit" class="btn btn-primary btn-icon" aria-label="Enviar">➤</button>
+          </form>
+        </div>
+
+        <div id="tab-people" class="panel-content hidden">
+          <ul id="people-list" class="people-list"></ul>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
