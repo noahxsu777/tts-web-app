@@ -47,9 +47,19 @@
   const state = {
     roomId: null,
     myId: null,
+    myRole: 'guest',
     users: [],
     video: null,
   };
+
+  const ROLE_BADGE = { host: '👑', moderator: '🛡️' };
+  const ROLE_LABEL = { host: 'Anfitrión', moderator: 'Moderador' };
+
+  function canModerate(actorRole, targetRole) {
+    if (actorRole === 'host') return targetRole !== 'host';
+    if (actorRole === 'moderator') return targetRole === 'guest';
+    return false;
+  }
 
   let ytPlayer = null;
   let ytReady = false;
@@ -118,9 +128,15 @@
 
   function enterRoom(roomId, name) {
     socket.emit('join-room', { roomId, name }, (res) => {
-      if (!res || res.error) { showError('No se pudo unir a la sala. Verifica el código.'); return; }
+      if (!res || res.error) {
+        showError(res && res.error === 'kicked'
+          ? 'Fuiste expulsado de esta sala y no puedes volver a entrar con ese nombre.'
+          : 'No se pudo unir a la sala. Verifica el código.');
+        return;
+      }
       state.roomId = res.roomId;
       state.myId = res.you.id;
+      state.myRole = res.you.role;
       state.users = res.users;
       state.video = res.video;
 
@@ -192,6 +208,13 @@
       name.textContent = u.name;
       li.appendChild(av);
       li.appendChild(name);
+      if (ROLE_BADGE[u.role]) {
+        const roleBadge = document.createElement('span');
+        roleBadge.className = 'person-role';
+        roleBadge.textContent = ROLE_BADGE[u.role];
+        roleBadge.title = ROLE_LABEL[u.role];
+        li.appendChild(roleBadge);
+      }
       if (u.id === state.myId) {
         const you = document.createElement('span');
         you.className = 'person-you';
@@ -204,7 +227,45 @@
       if (u.mic === false && u.cam) badges.appendChild(document.createTextNode('🔇'));
       if (u.screen) badges.appendChild(document.createTextNode('🖥️'));
       li.appendChild(badges);
+
+      if (u.id !== state.myId && canModerate(state.myRole, u.role)) {
+        const actions = document.createElement('span');
+        actions.className = 'person-actions';
+
+        if (state.myRole === 'host') {
+          const modBtn = document.createElement('button');
+          modBtn.type = 'button';
+          modBtn.className = 'person-action-btn';
+          modBtn.title = u.role === 'moderator' ? 'Quitar moderador' : 'Hacer moderador';
+          modBtn.textContent = u.role === 'moderator' ? '🛡️−' : '🛡️+';
+          modBtn.addEventListener('click', () => setRole(u.id, u.role === 'moderator' ? 'guest' : 'moderator'));
+          actions.appendChild(modBtn);
+        }
+
+        const kickBtn = document.createElement('button');
+        kickBtn.type = 'button';
+        kickBtn.className = 'person-action-btn kick';
+        kickBtn.title = `Expulsar a ${u.name}`;
+        kickBtn.textContent = '⛔';
+        kickBtn.addEventListener('click', () => kickUser(u.id, u.name));
+        actions.appendChild(kickBtn);
+
+        li.appendChild(actions);
+      }
       peopleList.appendChild(li);
+    });
+  }
+
+  function kickUser(targetId, targetName) {
+    if (!confirm(`¿Expulsar a ${targetName} de la sala?`)) return;
+    socket.emit('kick-user', { roomId: state.roomId, targetId }, (res) => {
+      if (res && res.error) showToast(res.error);
+    });
+  }
+
+  function setRole(targetId, role) {
+    socket.emit('set-role', { roomId: state.roomId, targetId, role }, (res) => {
+      if (res && res.error) showToast(res.error);
     });
   }
 
@@ -488,7 +549,19 @@
 
   socket.on('user-list', (users) => {
     state.users = users;
+    const me = users.find((u) => u.id === state.myId);
+    if (me) state.myRole = me.role;
     renderPeople();
+  });
+
+  socket.on('system-message', ({ message }) => appendChatMessage({ system: true, message }));
+
+  socket.on('kicked', ({ by }) => {
+    appendChatMessage({ system: true, message: `Fuiste expulsado de la sala por ${by}.` });
+    showToast('Fuiste expulsado de la sala.');
+    if (syncInterval) clearInterval(syncInterval);
+    peers.forEach((_, id) => closePeer(id));
+    setTimeout(() => { location.href = '/'; }, 2000);
   });
 
   socket.on('video-changed', ({ video }) => { hideSearchResults(); loadVideo(video, 0, false); });

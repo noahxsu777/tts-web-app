@@ -98,12 +98,17 @@ function colorForSocket(socketId) {
  *   isPlaying: boolean,
  *   currentTime: number,
  *   lastUpdate: number, // ms epoch, used to extrapolate currentTime for late joiners
- *   users: Map<socketId, { name, color, cam, mic, screen }>,
+ *   users: Map<socketId, { name, color, cam, mic, screen, role }>,
+ *   hostId: string|null, // socket id of the current host, re-assigned when the host leaves
+ *   kicked: Set<string>, // names blocked from rejoining after being expelled, cleared when room empties
  *   createdAt: number,
  *   vbrowser: { sessionId, embedUrl } | null,
  * }>
  */
 const rooms = new Map();
+
+// 'host' can kick/promote anyone; 'moderator' can kick guests; 'guest' has no moderation rights.
+const ROLES = ['host', 'moderator', 'guest'];
 
 function getOrCreateRoom(roomId) {
   let room = rooms.get(roomId);
@@ -114,12 +119,20 @@ function getOrCreateRoom(roomId) {
       currentTime: 0,
       lastUpdate: Date.now(),
       users: new Map(),
+      hostId: null,
+      kicked: new Set(),
       createdAt: Date.now(),
       vbrowser: null,
     };
     rooms.set(roomId, room);
   }
   return room;
+}
+
+function canModerate(actorRole, targetRole) {
+  if (actorRole === 'host') return targetRole !== 'host';
+  if (actorRole === 'moderator') return targetRole === 'guest';
+  return false;
 }
 
 function estimatedCurrentTime(room) {
@@ -136,7 +149,23 @@ function roomUserList(room) {
     cam: !!u.cam,
     mic: !!u.mic,
     screen: !!u.screen,
+    role: u.role,
   }));
+}
+
+function announce(io, roomId, message) {
+  io.to(roomId).emit('system-message', { message });
+}
+
+/** Hands the host role to the longest-standing moderator, or else the longest-standing guest. */
+function reassignHost(room) {
+  const remaining = [...room.users.entries()];
+  if (!remaining.length) { room.hostId = null; return null; }
+  const next = remaining.find(([, u]) => u.role === 'moderator') || remaining[0];
+  const [nextId, nextUser] = next;
+  nextUser.role = 'host';
+  room.hostId = nextId;
+  return { id: nextId, name: nextUser.name };
 }
 
 function parseVideoInput(input) {
@@ -170,17 +199,25 @@ io.on('connection', (socket) => {
     }
     roomId = roomId.toUpperCase();
     const room = getOrCreateRoom(roomId);
+
+    const safeName = (name || 'Guest').toString().slice(0, 24).trim() || 'Guest';
+    if (room.kicked.has(safeName.toLowerCase())) {
+      if (typeof cb === 'function') cb({ error: 'kicked' });
+      return;
+    }
+
     currentRoomId = roomId;
     socket.join(roomId);
 
-    const safeName = (name || 'Guest').toString().slice(0, 24).trim() || 'Guest';
     const color = colorForSocket(socket.id);
-    room.users.set(socket.id, { name: safeName, color, cam: false, mic: false, screen: false });
+    const role = room.hostId ? 'guest' : 'host';
+    room.users.set(socket.id, { name: safeName, color, cam: false, mic: false, screen: false, role });
+    if (role === 'host') room.hostId = socket.id;
 
     if (typeof cb === 'function') {
       cb({
         roomId,
-        you: { id: socket.id, name: safeName, color },
+        you: { id: socket.id, name: safeName, color, role },
         video: room.video,
         isPlaying: room.isPlaying,
         currentTime: estimatedCurrentTime(room),
@@ -189,8 +226,53 @@ io.on('connection', (socket) => {
       });
     }
 
-    socket.to(roomId).emit('user-joined', { id: socket.id, name: safeName, color });
+    socket.to(roomId).emit('user-joined', { id: socket.id, name: safeName, color, role });
     io.to(roomId).emit('user-list', roomUserList(room));
+  });
+
+  socket.on('kick-user', ({ roomId, targetId }, cb) => {
+    const room = rooms.get(roomId);
+    if (!room) { if (typeof cb === 'function') cb({ error: 'Sala no encontrada.' }); return; }
+    const actor = room.users.get(socket.id);
+    const target = room.users.get(targetId);
+    if (!actor || !target) { if (typeof cb === 'function') cb({ error: 'Usuario no encontrado.' }); return; }
+    if (targetId === socket.id || !canModerate(actor.role, target.role)) {
+      if (typeof cb === 'function') cb({ error: 'No tienes permiso para expulsar a este usuario.' });
+      return;
+    }
+
+    room.users.delete(targetId);
+    room.kicked.add(target.name.toLowerCase());
+    const targetSocket = io.sockets.sockets.get(targetId);
+    if (targetSocket) {
+      targetSocket.emit('kicked', { by: actor.name });
+      targetSocket.leave(roomId);
+    }
+    io.to(roomId).emit('user-left', { id: targetId });
+    io.to(roomId).emit('user-list', roomUserList(room));
+    announce(io, roomId, `${actor.name} expulsó a ${target.name} de la sala.`);
+    if (typeof cb === 'function') cb({ ok: true });
+  });
+
+  socket.on('set-role', ({ roomId, targetId, role }, cb) => {
+    const room = rooms.get(roomId);
+    if (!room) { if (typeof cb === 'function') cb({ error: 'Sala no encontrada.' }); return; }
+    const actor = room.users.get(socket.id);
+    const target = room.users.get(targetId);
+    if (!actor || !target || actor.role !== 'host' || targetId === socket.id) {
+      if (typeof cb === 'function') cb({ error: 'No tienes permiso para hacer esto.' });
+      return;
+    }
+    if (!['moderator', 'guest'].includes(role)) {
+      if (typeof cb === 'function') cb({ error: 'Rol inválido.' });
+      return;
+    }
+    target.role = role;
+    io.to(roomId).emit('user-list', roomUserList(room));
+    announce(io, roomId, role === 'moderator'
+      ? `${actor.name} nombró a ${target.name} moderador.`
+      : `${actor.name} quitó a ${target.name} de moderador.`);
+    if (typeof cb === 'function') cb({ ok: true });
   });
 
   socket.on('set-video', ({ roomId, input }) => {
@@ -342,8 +424,13 @@ io.on('connection', (socket) => {
     if (!currentRoomId) return;
     const room = rooms.get(currentRoomId);
     if (!room) return;
+    const wasHost = room.hostId === socket.id;
     room.users.delete(socket.id);
     socket.to(currentRoomId).emit('user-left', { id: socket.id });
+    if (wasHost) {
+      const newHost = reassignHost(room);
+      if (newHost) announce(io, currentRoomId, `${newHost.name} es ahora el anfitrión de la sala.`);
+    }
     io.to(currentRoomId).emit('user-list', roomUserList(room));
     if (room.users.size === 0) {
       if (room.vbrowser) {
