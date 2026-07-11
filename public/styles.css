@@ -400,6 +400,17 @@ input {
   background: #000;
 }
 
+/* The YouTube IFrame API replaces our target div with its own <iframe>, which
+   otherwise defaults to a fixed 640x390 size pinned in a corner. Force it to
+   fill (and thus stay centered in) the video stage regardless of that default. */
+#youtube-player-wrapper iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
 .reaction-layer {
   position: absolute;
   inset: 0;
@@ -424,6 +435,72 @@ input {
 .video-form {
   display: flex;
   gap: 8px;
+}
+
+.video-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 6px;
+}
+
+.search-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  text-align: left;
+  color: var(--text);
+}
+
+.search-result:hover { background: rgba(255, 255, 255, 0.07); }
+
+.search-result img {
+  width: 64px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: #000;
+}
+
+.search-result .result-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.search-result .result-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.search-result .result-channel {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.search-result-empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-faint);
 }
 
 .controls-row {
@@ -704,19 +781,54 @@ input {
     grid-template-columns: 1fr;
   }
   .side-panel {
-    height: 480px;
+    height: clamp(320px, 60vh, 480px);
+    min-height: 320px;
   }
   .room-code-label { display: none; }
 }
 
 @media (max-width: 560px) {
   .landing-card { padding: 30px 22px; }
-  .room-header { padding: 12px 14px; }
-  .room-body { padding: 14px 14px 20px; gap: 14px; }
+  .room-header { padding: 12px 14px; gap: 10px; }
+  .room-body { padding: 12px 12px 16px; gap: 12px; }
   .feature-list { grid-template-columns: 1fr; }
   .video-tile { width: 92px; }
   .call-btn span { display: none; }
-  .call-btn { padding: 9px 12px; }
+  .call-btn { padding: 8px 10px; font-size: 15px; }
+  .controls-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .call-controls, .reactions-bar { flex-shrink: 0; }
+  .call-controls::after {
+    content: '';
+    width: 1px;
+    align-self: stretch;
+    background: var(--card-border);
+    margin: 2px 2px;
+    flex-shrink: 0;
+  }
+  .reaction-btn { padding: 7px 11px; font-size: 17px; }
+  .side-panel {
+    height: clamp(260px, 52vh, 420px);
+    min-height: 260px;
+    border-radius: var(--radius-md);
+  }
+  .panel-tab { padding: 12px 6px; font-size: 13px; }
+  .chat-messages { padding: 12px; gap: 10px; }
+  .chat-form { padding: 10px; }
+  .people-list { padding: 10px; }
+  .video-search-results { max-height: 220px; }
+  .search-result img { width: 52px; height: 39px; }
+}
+
+@media (max-width: 380px) {
+  .room-brand { display: none; }
+  .room-header { gap: 8px; }
+  .avatar-stack { display: none; }
 }
 
 /* Scrollbars */

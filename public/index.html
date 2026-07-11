@@ -85,9 +85,10 @@
         </div>
 
         <form id="video-form" class="video-form">
-          <input id="video-url-input" class="text-input" type="text" placeholder="Pega un enlace de YouTube o video (https://...)" autocomplete="off" />
-          <button type="submit" class="btn btn-primary btn-compact">Cargar</button>
+          <input id="video-url-input" class="text-input" type="text" placeholder="Pega un enlace de YouTube/video, o escribe para buscar en YouTube…" autocomplete="off" />
+          <button type="submit" class="btn btn-primary btn-compact" id="video-form-btn">Cargar</button>
         </form>
+        <div id="video-search-results" class="video-search-results hidden"></div>
 
         <div class="controls-row">
           <div class="call-controls">

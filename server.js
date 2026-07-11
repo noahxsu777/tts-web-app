@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 8080;
 const HYPERBEAM_API_KEY = process.env.HYPERBEAM_API_KEY || '';
 const HYPERBEAM_API_BASE = 'https://engine.hyperbeam.com/v0';
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
 
 const app = express();
 const server = http.createServer(app);
@@ -51,6 +52,25 @@ async function stopHyperbeamSession(sessionId) {
   } catch (err) {
     console.error('Failed to stop Hyperbeam session', sessionId, err);
   }
+}
+
+async function searchYoutube(query) {
+  if (!YOUTUBE_API_KEY) throw new Error('missing-api-key');
+  const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8&q=${encodeURIComponent(query)}&key=${YOUTUBE_API_KEY}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`youtube-${res.status}: ${text.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  return (data.items || [])
+    .filter((item) => item.id && item.id.videoId)
+    .map((item) => ({
+      videoId: item.id.videoId,
+      title: item.snippet?.title || 'Video de YouTube',
+      channel: item.snippet?.channelTitle || '',
+      thumbnail: item.snippet?.thumbnails?.default?.url || '',
+    }));
 }
 
 const ROOM_ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -183,6 +203,22 @@ io.on('connection', (socket) => {
     room.currentTime = 0;
     room.lastUpdate = Date.now();
     io.to(roomId).emit('video-changed', { video });
+  });
+
+  socket.on('youtube-search', async ({ query }, cb) => {
+    if (typeof cb !== 'function') return;
+    const q = (query || '').toString().trim().slice(0, 100);
+    if (!q) { cb({ results: [] }); return; }
+    try {
+      const results = await searchYoutube(q);
+      cb({ results });
+    } catch (err) {
+      console.error('youtube-search failed:', err.message);
+      const message = err.message === 'missing-api-key'
+        ? 'La búsqueda de YouTube no está configurada en el servidor (falta YOUTUBE_API_KEY).'
+        : 'No se pudo buscar en YouTube.';
+      cb({ error: message });
+    }
   });
 
   socket.on('play', ({ roomId, currentTime }) => {

@@ -57,11 +57,12 @@ npm install
 \`\`\`
 
 ### Variables de entorno (opcional)
-Copia \`.env.example\` a \`.env\` si quieres habilitar el navegador virtual compartido:
+Copia \`.env.example\` a \`.env\` si quieres habilitar el navegador virtual compartido o la búsqueda de YouTube:
 \`\`\`bash
 cp .env.example .env
 \`\`\`
 - \`HYPERBEAM_API_KEY\`: tu API key de [hyperbeam.com](https://hyperbeam.com). Sin ella, todo lo demás (video sync, chat, videollamada) funciona igual; solo el botón "Navegador" mostrará un error.
+- \`YOUTUBE_API_KEY\`: tu API key de [YouTube Data API v3](https://console.developers.google.com). Sin ella, pegar un link de YouTube/video sigue funcionando; solo la búsqueda por texto en ese mismo campo mostrará un error.
 - \`PORT\`: puerto del servidor (default 8080).
 
 ### Ejecutar en desarrollo
@@ -109,7 +110,7 @@ tts-web-app/
 ## 🎮 Cómo funciona
 
 1. Escribe tu nombre y crea una sala (o únete con un código de 6 caracteres).
-2. Pega el enlace de un video de YouTube o una URL de video directo — se carga para todos.
+2. Pega el enlace de un video de YouTube o una URL de video directo, o escribe un término de búsqueda en ese mismo campo para buscar en YouTube (si configuraste \`YOUTUBE_API_KEY\`) y elegir de una lista con miniaturas — se carga para todos.
 3. Cualquiera puede darle play/pausa/seek al video: el cambio se sincroniza al instante en toda la sala.
 4. Usa el chat o las reacciones para comentar mientras ven juntos.
 5. Copia el enlace de la sala (botón junto al código) para invitar a más gente.

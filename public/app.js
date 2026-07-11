@@ -24,6 +24,8 @@
   const videoChatStrip = el('video-chat-strip');
   const videoForm = el('video-form');
   const videoUrlInput = el('video-url-input');
+  const videoFormBtn = el('video-form-btn');
+  const videoSearchResults = el('video-search-results');
   const camBtn = el('cam-btn');
   const micBtn = el('mic-btn');
   const screenBtn = el('screen-btn');
@@ -254,13 +256,84 @@
     setTimeout(() => span.remove(), 2700);
   }
 
-  // ---- Video loading ----
+  // ---- Video loading + YouTube search ----
+  function looksLikeUrl(str) {
+    return /^https?:\/\//i.test(str.trim());
+  }
+
+  function hideSearchResults() {
+    videoSearchResults.classList.add('hidden');
+    videoSearchResults.innerHTML = '';
+  }
+
+  function renderSearchResults(results) {
+    videoSearchResults.innerHTML = '';
+    if (!results.length) {
+      const empty = document.createElement('div');
+      empty.className = 'search-result-empty';
+      empty.textContent = 'Sin resultados.';
+      videoSearchResults.appendChild(empty);
+      videoSearchResults.classList.remove('hidden');
+      return;
+    }
+    results.forEach((r) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'search-result';
+
+      const img = document.createElement('img');
+      img.src = r.thumbnail;
+      img.alt = '';
+      card.appendChild(img);
+
+      const info = document.createElement('div');
+      info.className = 'result-info';
+      const title = document.createElement('span');
+      title.className = 'result-title';
+      title.textContent = r.title;
+      const channel = document.createElement('span');
+      channel.className = 'result-channel';
+      channel.textContent = r.channel;
+      info.appendChild(title);
+      info.appendChild(channel);
+      card.appendChild(info);
+
+      card.addEventListener('click', () => {
+        socket.emit('set-video', { roomId: state.roomId, input: `https://www.youtube.com/watch?v=${r.videoId}` });
+        hideSearchResults();
+        videoUrlInput.value = '';
+      });
+      videoSearchResults.appendChild(card);
+    });
+    videoSearchResults.classList.remove('hidden');
+  }
+
+  function searchYoutube(query) {
+    hideSearchResults();
+    videoFormBtn.disabled = true;
+    videoFormBtn.textContent = 'Buscando…';
+    socket.emit('youtube-search', { query }, (res) => {
+      videoFormBtn.disabled = false;
+      videoFormBtn.textContent = 'Cargar';
+      if (!res || res.error) {
+        showToast((res && res.error) || 'No se pudo buscar en YouTube.');
+        return;
+      }
+      renderSearchResults(res.results);
+    });
+  }
+
   videoForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const input = videoUrlInput.value.trim();
     if (!input) return;
-    socket.emit('set-video', { roomId: state.roomId, input });
-    videoUrlInput.value = '';
+    if (looksLikeUrl(input)) {
+      socket.emit('set-video', { roomId: state.roomId, input });
+      videoUrlInput.value = '';
+      hideSearchResults();
+    } else {
+      searchYoutube(input);
+    }
   });
 
   function destroyPlayers() {
@@ -313,6 +386,11 @@
     youtubeWrapper.appendChild(target);
 
     ytPlayer = new YT.Player(target.id, {
+      // Without explicit width/height the API defaults to a fixed 640x390 iframe
+      // pinned in the corner instead of filling the stage — that's why it looked
+      // off-center. CSS below also forces the resulting iframe to fill/center.
+      width: '100%',
+      height: '100%',
       videoId,
       playerVars: {
         autoplay: playing ? 1 : 0,
@@ -413,7 +491,7 @@
     renderPeople();
   });
 
-  socket.on('video-changed', ({ video }) => loadVideo(video, 0, false));
+  socket.on('video-changed', ({ video }) => { hideSearchResults(); loadVideo(video, 0, false); });
 
   socket.on('play', ({ currentTime }) => {
     if (!state.video) return;
