@@ -141,9 +141,10 @@ input {
   z-index: 1;
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 32px 20px;
+  padding: 48px 20px 64px;
+  gap: 56px;
 }
 
 .landing-card {
@@ -249,6 +250,120 @@ input {
   gap: 10px;
   font-size: 13px;
   color: var(--text-dim);
+}
+
+/* ---------- Why-us section ---------- */
+
+.why-section {
+  width: 100%;
+  max-width: 900px;
+  animation: rise 0.6s ease;
+}
+
+.why-section h2 {
+  text-align: center;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  margin: 0 0 10px;
+}
+
+.why-sub {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 14.5px;
+  line-height: 1.6;
+  max-width: 560px;
+  margin: 0 auto 32px;
+}
+
+.why-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 36px;
+}
+
+.why-card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 20px;
+}
+
+.why-icon {
+  font-size: 26px;
+  line-height: 1;
+  display: block;
+  margin-bottom: 10px;
+}
+
+.why-card h3 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 6px;
+}
+
+.why-card p {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.why-table-hint {
+  display: none;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-faint);
+  margin: 0 0 6px;
+}
+
+.why-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+}
+
+.why-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+
+.why-table th, .why-table td {
+  padding: 12px 16px;
+  text-align: center;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.why-table tr:last-child td { border-bottom: none; }
+
+.why-table th:first-child, .why-table td:first-child {
+  text-align: left;
+  color: var(--text);
+  font-weight: 600;
+  white-space: normal;
+}
+
+.why-table th {
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.why-table td { color: var(--text-dim); }
+
+.why-table-highlight {
+  background: rgba(124, 108, 246, 0.1);
+  color: var(--text) !important;
+  font-weight: 700;
+}
+
+.why-table th.why-table-highlight {
+  color: var(--primary) !important;
 }
 
 /* ---------- Room layout ---------- */
@@ -837,6 +952,7 @@ input {
     min-height: 320px;
   }
   .room-code-label { display: none; }
+  .why-grid { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 560px) {
@@ -845,6 +961,9 @@ input {
   .room-body { padding: 12px 12px 16px; gap: 12px; }
   .feature-list { grid-template-columns: 1fr; }
   .video-tile { width: 92px; }
+  .why-grid { grid-template-columns: 1fr; }
+  .why-section h2 { font-size: 22px; }
+  .why-table-hint { display: block; }
   .call-btn span { display: none; }
   .call-btn { padding: 8px 10px; font-size: 15px; }
   .controls-row {
