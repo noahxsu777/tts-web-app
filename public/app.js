@@ -67,6 +67,7 @@
   let suppressYt = false;
   let suppressVideoEl = false;
   let syncInterval = null;
+  let hlsInstance = null;
 
   // ---- WebRTC state ----
   const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
@@ -322,6 +323,12 @@
     return /^https?:\/\//i.test(str.trim());
   }
 
+  // A bare .m3u is an IPTV channel list (needs fetching + parsing server-side);
+  // a .m3u8 is itself a playable HLS stream, so it's handled like any other URL.
+  function looksLikePlaylist(str) {
+    return /\.m3u(?:[?#]|$)/i.test(str.trim());
+  }
+
   function hideSearchResults() {
     videoSearchResults.classList.add('hidden');
     videoSearchResults.innerHTML = '';
@@ -384,11 +391,75 @@
     });
   }
 
+  function channelPlaceholder() {
+    const div = document.createElement('div');
+    div.className = 'result-channel-icon';
+    div.textContent = '📡';
+    return div;
+  }
+
+  function renderChannelResults(channels) {
+    videoSearchResults.innerHTML = '';
+    channels.forEach((c) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'search-result';
+
+      if (c.logo) {
+        const img = document.createElement('img');
+        img.src = c.logo;
+        img.alt = '';
+        img.onerror = () => img.replaceWith(channelPlaceholder());
+        card.appendChild(img);
+      } else {
+        card.appendChild(channelPlaceholder());
+      }
+
+      const info = document.createElement('div');
+      info.className = 'result-info';
+      const title = document.createElement('span');
+      title.className = 'result-title';
+      title.textContent = c.title;
+      info.appendChild(title);
+      card.appendChild(info);
+
+      card.addEventListener('click', () => {
+        socket.emit('set-video', { roomId: state.roomId, input: c.url });
+        hideSearchResults();
+        videoUrlInput.value = '';
+      });
+      videoSearchResults.appendChild(card);
+    });
+    videoSearchResults.classList.remove('hidden');
+  }
+
+  function loadPlaylist(url) {
+    hideSearchResults();
+    videoFormBtn.disabled = true;
+    videoFormBtn.textContent = 'Cargando…';
+    socket.emit('load-playlist', { url }, (res) => {
+      videoFormBtn.disabled = false;
+      videoFormBtn.textContent = 'Cargar';
+      if (!res || res.error) {
+        showToast((res && res.error) || 'No se pudo cargar la lista m3u.');
+        return;
+      }
+      if (res.channels.length === 1) {
+        socket.emit('set-video', { roomId: state.roomId, input: res.channels[0].url });
+        videoUrlInput.value = '';
+      } else {
+        renderChannelResults(res.channels);
+      }
+    });
+  }
+
   videoForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const input = videoUrlInput.value.trim();
     if (!input) return;
-    if (looksLikeUrl(input)) {
+    if (looksLikePlaylist(input)) {
+      loadPlaylist(input);
+    } else if (looksLikeUrl(input)) {
       socket.emit('set-video', { roomId: state.roomId, input });
       videoUrlInput.value = '';
       hideSearchResults();
@@ -401,6 +472,10 @@
     if (ytPlayer && ytPlayer.destroy) {
       try { ytPlayer.destroy(); } catch (e) { /* noop */ }
       ytPlayer = null;
+    }
+    if (hlsInstance) {
+      try { hlsInstance.destroy(); } catch (e) { /* noop */ }
+      hlsInstance = null;
     }
     videoElement.onplay = null;
     videoElement.onpause = null;
@@ -425,6 +500,10 @@
       } else {
         pendingYt = { videoId: video.youtubeId, startTime, playing };
       }
+    } else if (video.type === 'hls') {
+      videoElement.classList.remove('hidden');
+      attachVideoElementHandlers(true);
+      startHls(video.url, playing);
     } else if (video.type === 'video') {
       videoElement.classList.remove('hidden');
       videoElement.src = video.url;
@@ -434,6 +513,30 @@
         suppressVideoEl = true;
         videoElement.play().catch(() => {}).finally(() => { suppressVideoEl = false; });
       }
+    }
+  }
+
+  // Live channels have no fixed timeline, so this only starts playback at the
+  // live edge — it never seeks to a startTime the way on-demand video does.
+  function startHls(url, playing) {
+    const playIfNeeded = () => {
+      if (!playing) return;
+      suppressVideoEl = true;
+      videoElement.play().catch(() => {}).finally(() => { suppressVideoEl = false; });
+    };
+    if (window.Hls && window.Hls.isSupported()) {
+      hlsInstance = new window.Hls({ liveDurationInfinity: true });
+      hlsInstance.on(window.Hls.Events.ERROR, (_evt, data) => {
+        if (data.fatal) showToast('No se pudo cargar el canal en vivo (HLS).');
+      });
+      hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, playIfNeeded);
+      hlsInstance.loadSource(url);
+      hlsInstance.attachMedia(videoElement);
+    } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+      videoElement.src = url;
+      playIfNeeded();
+    } else {
+      showToast('Tu navegador no soporta la reproducción de HLS.');
     }
   }
 
@@ -494,16 +597,18 @@
     state.video = null;
   }
 
-  function attachVideoElementHandlers() {
+  function attachVideoElementHandlers(isLive) {
     videoElement.onplay = () => {
       if (suppressVideoEl) return;
-      socket.emit('play', { roomId: state.roomId, currentTime: videoElement.currentTime });
+      socket.emit('play', { roomId: state.roomId, currentTime: isLive ? 0 : videoElement.currentTime });
     };
     videoElement.onpause = () => {
       if (suppressVideoEl) return;
-      socket.emit('pause', { roomId: state.roomId, currentTime: videoElement.currentTime });
+      socket.emit('pause', { roomId: state.roomId, currentTime: isLive ? 0 : videoElement.currentTime });
     };
-    videoElement.onseeked = () => {
+    // Live streams have no fixed timeline to seek within — hls.js's own buffering
+    // jumps would otherwise fire spurious 'seek' syncs and desync every viewer.
+    videoElement.onseeked = isLive ? null : () => {
       if (suppressVideoEl) return;
       socket.emit('seek', { roomId: state.roomId, currentTime: videoElement.currentTime });
     };
@@ -573,9 +678,9 @@
         if (typeof currentTime === 'number') ytPlayer.seekTo(currentTime, true);
         ytPlayer.playVideo();
       });
-    } else if (state.video.type === 'video') {
+    } else if (state.video.type === 'video' || state.video.type === 'hls') {
       withSuppressed((v) => (suppressVideoEl = v), () => {
-        if (typeof currentTime === 'number') videoElement.currentTime = currentTime;
+        if (state.video.type === 'video' && typeof currentTime === 'number') videoElement.currentTime = currentTime;
         videoElement.play().catch(() => {});
       });
     }
@@ -588,10 +693,10 @@
         ytPlayer.pauseVideo();
         if (typeof currentTime === 'number') ytPlayer.seekTo(currentTime, true);
       });
-    } else if (state.video.type === 'video') {
+    } else if (state.video.type === 'video' || state.video.type === 'hls') {
       withSuppressed((v) => (suppressVideoEl = v), () => {
         videoElement.pause();
-        if (typeof currentTime === 'number') videoElement.currentTime = currentTime;
+        if (state.video.type === 'video' && typeof currentTime === 'number') videoElement.currentTime = currentTime;
       });
     }
   });

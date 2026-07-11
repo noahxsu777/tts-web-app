@@ -54,8 +54,7 @@ async function stopHyperbeamSession(sessionId) {
   }
 }
 
-async function searchYoutube(query) {
-  if (!YOUTUBE_API_KEY) throw new Error('missing-api-key');
+async function searchYoutubeApi(query) {
   const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8&q=${encodeURIComponent(query)}&key=${YOUTUBE_API_KEY}`;
   const res = await fetch(url);
   if (!res.ok) {
@@ -71,6 +70,62 @@ async function searchYoutube(query) {
       channel: item.snippet?.channelTitle || '',
       thumbnail: item.snippet?.thumbnails?.default?.url || '',
     }));
+}
+
+/**
+ * Falls back to YouTube's own public search results page (the same HTML a
+ * browser gets, no auth) when no Data API key is configured, so search works
+ * out of the box. Pulls the videoRenderer entries out of the ytInitialData
+ * blob YouTube embeds in the page; this is unofficial and can break if
+ * YouTube changes that markup, hence the official API is always preferred
+ * when a key is present.
+ */
+async function searchYoutubeScrape(query) {
+  const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+    },
+  });
+  if (!res.ok) throw new Error(`scrape-${res.status}`);
+  const html = await res.text();
+  const match = html.match(/var ytInitialData\s*=\s*(\{.+?\});<\/script>/s);
+  if (!match) throw new Error('scrape-parse-failed');
+  let data;
+  try {
+    data = JSON.parse(match[1]);
+  } catch {
+    throw new Error('scrape-parse-failed');
+  }
+  const sections = data?.contents?.twoColumnSearchResultsRenderer?.primaryContents
+    ?.sectionListRenderer?.contents || [];
+  const results = [];
+  for (const section of sections) {
+    for (const item of section?.itemSectionRenderer?.contents || []) {
+      const vr = item.videoRenderer;
+      if (!vr?.videoId) continue;
+      results.push({
+        videoId: vr.videoId,
+        title: (vr.title?.runs || []).map((r) => r.text).join('') || 'Video de YouTube',
+        channel: vr.ownerText?.runs?.[0]?.text || '',
+        thumbnail: vr.thumbnail?.thumbnails?.[0]?.url || '',
+      });
+      if (results.length >= 8) return results;
+    }
+  }
+  return results;
+}
+
+async function searchYoutube(query) {
+  if (YOUTUBE_API_KEY) {
+    try {
+      return await searchYoutubeApi(query);
+    } catch (err) {
+      console.error('YouTube Data API search failed, falling back to page scrape:', err.message);
+    }
+  }
+  return searchYoutubeScrape(query);
 }
 
 const ROOM_ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -176,10 +231,67 @@ function parseVideoInput(input) {
   if (ytMatch) {
     return { type: 'youtube', url: trimmed, youtubeId: ytMatch[1], title: 'YouTube video' };
   }
+  if (/^https?:\/\//i.test(trimmed) && /\.m3u8(?:[?#]|$)/i.test(trimmed)) {
+    return { type: 'hls', url: trimmed, youtubeId: null, title: trimmed.split('/').pop() || 'Canal en vivo' };
+  }
   if (/^https?:\/\//i.test(trimmed)) {
     return { type: 'video', url: trimmed, youtubeId: null, title: trimmed.split('/').pop() || trimmed };
   }
   return null;
+}
+
+// IPTV-style .m3u playlists are plain text and can list thousands of channels;
+// cap both the download size and the parsed channel count to keep this cheap.
+const M3U_MAX_BYTES = 2 * 1024 * 1024;
+const M3U_MAX_CHANNELS = 300;
+
+async function fetchM3uChannels(url) {
+  if (!/^https?:\/\//i.test(url)) throw new Error('invalid-url');
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`fetch-${res.status}`);
+  const reader = res.body?.getReader ? res.body.getReader() : null;
+  let text;
+  if (reader) {
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > M3U_MAX_BYTES) { reader.cancel(); throw new Error('too-large'); }
+      chunks.push(value);
+    }
+    text = Buffer.concat(chunks.map((c) => Buffer.from(c))).toString('utf8');
+  } else {
+    text = await res.text();
+  }
+  return parseM3uText(text);
+}
+
+function parseM3uText(text) {
+  const lines = text.split(/\r?\n/);
+  const channels = [];
+  let pendingTitle = null;
+  let pendingLogo = '';
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (line.startsWith('#EXTINF')) {
+      const titleMatch = line.match(/,(.*)$/);
+      pendingTitle = titleMatch ? titleMatch[1].trim() : null;
+      const logoMatch = line.match(/tvg-logo="([^"]*)"/i);
+      pendingLogo = logoMatch ? logoMatch[1] : '';
+      continue;
+    }
+    if (line.startsWith('#')) continue;
+    if (/^https?:\/\//i.test(line)) {
+      channels.push({ title: pendingTitle || line.split('/').pop() || 'Canal', url: line, logo: pendingLogo });
+      pendingTitle = null;
+      pendingLogo = '';
+      if (channels.length >= M3U_MAX_CHANNELS) break;
+    }
+  }
+  return channels;
 }
 
 io.on('connection', (socket) => {
@@ -296,9 +408,23 @@ io.on('connection', (socket) => {
       cb({ results });
     } catch (err) {
       console.error('youtube-search failed:', err.message);
-      const message = err.message === 'missing-api-key'
-        ? 'La búsqueda de YouTube no está configurada en el servidor (falta YOUTUBE_API_KEY).'
-        : 'No se pudo buscar en YouTube.';
+      cb({ error: 'No se pudo buscar en YouTube.' });
+    }
+  });
+
+  socket.on('load-playlist', async ({ url }, cb) => {
+    if (typeof cb !== 'function') return;
+    const trimmed = (url || '').toString().trim();
+    if (!trimmed) { cb({ error: 'Enlace vacío.' }); return; }
+    try {
+      const channels = await fetchM3uChannels(trimmed);
+      if (!channels.length) { cb({ error: 'No se encontraron canales en esta lista.' }); return; }
+      cb({ channels });
+    } catch (err) {
+      console.error('load-playlist failed:', err.message);
+      const message = err.message === 'too-large'
+        ? 'La lista m3u es demasiado grande.'
+        : 'No se pudo cargar la lista m3u.';
       cb({ error: message });
     }
   });
