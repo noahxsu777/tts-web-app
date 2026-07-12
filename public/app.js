@@ -122,10 +122,33 @@
   }
 
   // ---- Landing actions ----
+  const ROOM_ACTION_TIMEOUT = 10000;
+
+  function setBtnBusy(btn, busy, busyText) {
+    const label = btn.querySelector('span');
+    if (busy) {
+      if (label) label.dataset.originalText = label.textContent;
+      btn.disabled = true;
+      if (label) label.textContent = busyText;
+    } else {
+      btn.disabled = false;
+      if (label && label.dataset.originalText) label.textContent = label.dataset.originalText;
+    }
+  }
+
   createBtn.addEventListener('click', () => {
     const name = (nameInput.value || 'Guest').trim() || 'Guest';
     localStorage.setItem('wp_name', name);
-    socket.emit('create-room', ({ roomId }) => enterRoom(roomId, name));
+    landingError.classList.add('hidden');
+    setBtnBusy(createBtn, true, 'Creando…');
+    socket.timeout(ROOM_ACTION_TIMEOUT).emit('create-room', (err, res) => {
+      setBtnBusy(createBtn, false);
+      if (err || !res) {
+        showError('No se pudo crear la sala. Revisa tu conexión e intenta de nuevo.');
+        return;
+      }
+      enterRoom(res.roomId, name);
+    });
   });
 
   nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') createBtn.click(); });
@@ -137,17 +160,22 @@
     const name = (nameInput.value || 'Guest').trim() || 'Guest';
     if (!code) { showError('Ingresa un código de sala'); return; }
     localStorage.setItem('wp_name', name);
-    enterRoom(code, name);
+    landingError.classList.add('hidden');
+    setBtnBusy(joinBtn, true, 'Uniendo…');
+    enterRoom(code, name, () => setBtnBusy(joinBtn, false));
   }
 
-  function enterRoom(roomId, name) {
-    socket.emit('join-room', { roomId, name }, (res) => {
-      if (!res || res.error) {
+  function enterRoom(roomId, name, onSettled) {
+    socket.timeout(ROOM_ACTION_TIMEOUT).emit('join-room', { roomId, name }, (err, res) => {
+      if (onSettled) onSettled();
+      if (err || !res || res.error) {
         // showToast so this is visible even when re-called from a reconnect,
         // where the (hidden) landing screen's error text wouldn't be seen.
-        const message = res && res.error === 'kicked'
-          ? 'Fuiste expulsado de esta sala y no puedes volver a entrar con ese nombre.'
-          : 'No se pudo unir a la sala. Verifica el código.';
+        const message = err
+          ? 'No se pudo conectar. Revisa tu conexión e intenta de nuevo.'
+          : res && res.error === 'kicked'
+            ? 'Fuiste expulsado de esta sala y no puedes volver a entrar con ese nombre.'
+            : 'No se pudo unir a la sala. Verifica el código.';
         showError(message);
         showToast(message);
         return;

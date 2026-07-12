@@ -13,7 +13,14 @@ const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+// Tighter than the 25s/20s defaults so a dropped connection (phone locked,
+// backgrounded, network switch) is detected in ~18s instead of ~45s — the
+// room's user list stays accurate instead of showing a "ghost" participant
+// whose broadcasts silently went nowhere until the default timeout expired.
+const io = new Server(server, {
+  pingInterval: 10000,
+  pingTimeout: 8000,
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -472,10 +479,13 @@ io.on('connection', (socket) => {
   // A client asks for this after coming back from being backgrounded/hidden,
   // since mobile OSes/browsers routinely pause video while a tab isn't visible —
   // it snaps that one socket back to the room's current authoritative state.
+  // Also resends the user list, since a connection that silently died while
+  // backgrounded could have missed a join/leave broadcast in the meantime.
   socket.on('request-sync', ({ roomId }, cb) => {
     const room = rooms.get(roomId);
     if (!room) { if (typeof cb === 'function') cb({ error: 'Sala no encontrada.' }); return; }
     socket.emit(room.isPlaying ? 'play' : 'pause', { currentTime: estimatedCurrentTime(room) });
+    socket.emit('user-list', roomUserList(room));
     if (typeof cb === 'function') cb({ ok: true });
   });
 
